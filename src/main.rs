@@ -1,3 +1,7 @@
+use clap::Parser;
+use dockim::cli::Args;
+
 fn main() {
-    println!("Hello, world!");
+    let args = Args::parse();
+    println!("{args:?}");
 }
