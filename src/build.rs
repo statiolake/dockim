@@ -43,6 +43,7 @@ fn install_prerequisites(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
     }
 
     let prerequisites = &[
+        "zsh",
         "curl",
         "fzf",
         "ripgrep",

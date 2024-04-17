@@ -18,6 +18,9 @@ pub enum Subcommand {
 
     #[clap(alias = "v")]
     Neovide(NeovideArgs),
+
+    #[clap(alias = "sh")]
+    Shell(ShellArgs),
 }
 
 #[derive(Debug, clap::Parser)]
@@ -38,4 +41,9 @@ pub struct NeovideArgs {
 
     #[clap(short, long, default_value = "54321")]
     pub container_port: String,
+}
+
+#[derive(Debug, clap::Parser)]
+pub struct ShellArgs {
+    pub args: Vec<String>,
 }
