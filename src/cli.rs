@@ -21,6 +21,9 @@ pub enum Subcommand {
 
     #[clap(alias = "sh")]
     Shell(ShellArgs),
+
+    #[clap(alias = "p")]
+    Port(PortArgs),
 }
 
 #[derive(Debug, clap::Parser)]
@@ -46,4 +49,13 @@ pub struct NeovideArgs {
 #[derive(Debug, clap::Parser)]
 pub struct ShellArgs {
     pub args: Vec<String>,
+}
+
+#[derive(Debug, clap::Parser)]
+pub struct PortArgs {
+    /// "8080" or "8080:1234" (host:container)
+    pub port_descriptor: String,
+
+    #[clap(long, alias = "rm")]
+    pub remove: bool,
 }

@@ -161,6 +161,11 @@ impl DevContainer {
             socat_container_name,
         })
     }
+
+    pub fn stop_forward_port(&self, host_port: &str) -> Result<()> {
+        let socat_container_name = format!("dockim-socat-{}", host_port);
+        exec::exec(&["docker", "stop", &socat_container_name])
+    }
 }
 
 #[derive(Debug)]
