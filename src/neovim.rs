@@ -1,15 +1,19 @@
 use anyhow::{bail, Result};
 
-use crate::{cli::Args, devcontainer::DevContainer};
+use crate::{
+    cli::{Args, NeovimArgs},
+    devcontainer::DevContainer,
+};
 
-pub fn main(args: &Args) -> Result<()> {
+pub fn main(args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
 
     if dc.exec(&["nvim", "--version"]).is_err() {
-        bail!("* Neovim not found, build container first.");
+        bail!("Neovim not found, build container first.");
     }
 
-    dc.exec(&["nvim"])?;
+    let mut args = vec!["nvim".to_string()];
+    args.extend(neovim_args.args.clone());
 
-    Ok(())
+    dc.exec(&args)
 }

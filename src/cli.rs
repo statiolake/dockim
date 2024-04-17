@@ -14,11 +14,28 @@ pub enum Subcommand {
     Build(BuildArgs),
 
     #[clap(alias = "nvim")]
-    Neovim,
+    Neovim(NeovimArgs),
+
+    #[clap(alias = "v")]
+    Neovide(NeovideArgs),
 }
 
 #[derive(Debug, clap::Parser)]
 pub struct BuildArgs {
     #[clap(long)]
     pub rebuild: bool,
+}
+
+#[derive(Debug, clap::Parser)]
+pub struct NeovimArgs {
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, clap::Parser)]
+pub struct NeovideArgs {
+    #[clap(short, long, default_value = "54321")]
+    pub host_port: String,
+
+    #[clap(short, long, default_value = "54321")]
+    pub container_port: String,
 }

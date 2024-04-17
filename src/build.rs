@@ -79,7 +79,10 @@ fn install_prerequisites(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
 }
 
 fn install_neovim(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
-    if dc.exec_capturing_stdout(&["nvim", "--version"]).is_ok() {
+    if dc
+        .exec_capturing_stdout(&["/usr/local/bin/nvim", "--version"])
+        .is_ok()
+    {
         return Ok(());
     }
 
@@ -99,13 +102,14 @@ fn install_neovim(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
         "clone",
         "--depth",
         "1",
+        "--no-single-branch",
         "https://github.com/neovim/neovim",
         "/tmp/neovim",
     ])?;
 
     let cmds = vec![
         "cd /tmp/neovim".to_string(),
-        "(git checkout stable || true)".to_string(),
+        "(git checkout v0.9.5 || true)".to_string(),
         "make -j4".to_string(),
         sudo("make install"),
     ];
