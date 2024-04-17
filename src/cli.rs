@@ -1,5 +1,11 @@
 use std::path::PathBuf;
 
+pub mod build;
+pub mod neovide;
+pub mod neovim;
+pub mod port;
+pub mod shell;
+
 #[derive(Debug, clap::Parser)]
 pub struct Args {
     #[clap(subcommand)]

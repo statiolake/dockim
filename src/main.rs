@@ -1,10 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use dockim::{
-    build,
-    cli::{Args, Subcommand},
-    neovide, neovim, port, shell,
-};
+use dockim::cli::{build, neovide, neovim, port, shell, Args, Subcommand};
 
 fn main() -> Result<()> {
     let args = Args::parse();
