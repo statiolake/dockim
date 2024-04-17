@@ -60,8 +60,11 @@ pub struct ShellArgs {
 #[derive(Debug, clap::Parser)]
 pub struct PortArgs {
     /// "8080" or "8080:1234" (host:container)
-    pub port_descriptor: String,
+    pub port_descriptor: Option<String>,
 
     #[clap(long, alias = "rm")]
     pub remove: bool,
+
+    #[clap(long)]
+    pub remove_all: bool,
 }

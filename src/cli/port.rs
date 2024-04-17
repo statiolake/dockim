@@ -9,13 +9,19 @@ use crate::{
 };
 
 pub fn main(args: &Args, port_args: &PortArgs) -> Result<()> {
-    let (host_port, container_port) = match *port_args.port_descriptor.split(':').collect_vec() {
+    let dc = DevContainer::new(args.workspace_folder.clone());
+
+    if port_args.remove_all {
+        dc.remove_all_forwarded_ports()?;
+        return Ok(());
+    }
+
+    let port_descriptor = port_args.port_descriptor.as_deref().unwrap_or("");
+    let (host_port, container_port) = match *port_descriptor.split(':').collect_vec() {
         [port] => (port, port),
         [host_port, container_port] => (host_port, container_port),
-        _ => bail!("Invalid port descriptor: {}", port_args.port_descriptor),
+        _ => bail!("Invalid port descriptor: {port_descriptor}"),
     };
-
-    let dc = DevContainer::new(args.workspace_folder.clone());
 
     if port_args.remove {
         dc.stop_forward_port(host_port)?;

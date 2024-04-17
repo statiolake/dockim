@@ -130,7 +130,7 @@ impl DevContainer {
     }
 
     pub fn forward_port(&self, host_port: &str, container_port: &str) -> Result<PortForwardGuard> {
-        let socat_container_name = format!("dockim-socat-{}", host_port);
+        let socat_container_name = self.socat_container_name(host_port)?;
         let up_output = self.up_and_inspect()?;
         let container_ip = exec::capturing_stdout(&[
             "docker",
@@ -163,8 +163,32 @@ impl DevContainer {
     }
 
     pub fn stop_forward_port(&self, host_port: &str) -> Result<()> {
-        let socat_container_name = format!("dockim-socat-{}", host_port);
+        let socat_container_name = self.socat_container_name(host_port)?;
         exec::exec(&["docker", "stop", &socat_container_name])
+    }
+
+    pub fn remove_all_forwarded_ports(&self) -> Result<()> {
+        let socat_container_name_prefix = self.socat_container_name("")?;
+
+        let name_filter = format!("name={socat_container_name_prefix}");
+        let port_forward_containers =
+            exec::capturing_stdout(&["docker", "ps", "-aq", "--filter", &name_filter])?;
+
+        let stop = |container_id: &str| exec::exec(&["docker", "stop", &container_id]);
+        for port_forward_container in port_forward_containers.split_whitespace() {
+            stop(port_forward_container)?;
+        }
+
+        Ok(())
+    }
+
+    fn socat_container_name(&self, host_port: &str) -> Result<String> {
+        let up_output = self.up_and_inspect()?;
+
+        Ok(format!(
+            "dockim-{}-socat-{}",
+            up_output.container_id, host_port
+        ))
     }
 }
 
