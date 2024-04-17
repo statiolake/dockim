@@ -1,7 +1,15 @@
+use anyhow::Result;
 use clap::Parser;
-use dockim::cli::Args;
+use dockim::{
+    build,
+    cli::{Args, Subcommand},
+};
 
-fn main() {
+fn main() -> Result<()> {
     let args = Args::parse();
-    println!("{args:?}");
+    match args.subcommand {
+        Subcommand::Build(args) => build::main(&args)?,
+    }
+
+    Ok(())
 }
