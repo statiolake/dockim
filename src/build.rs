@@ -2,14 +2,14 @@ use anyhow::{Context, Result};
 use itertools::{chain, Itertools};
 
 use crate::{
-    cli::BuildArgs,
+    cli::{Args, BuildArgs},
     devcontainer::{DevContainer, UpOutput},
 };
 
-pub fn main(args: &BuildArgs) -> Result<()> {
+pub fn main(args: &Args, build_args: &BuildArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
 
-    let up_cont = devcontainer_up(&dc, args.rebuild)?;
+    let up_cont = devcontainer_up(&dc, build_args.rebuild)?;
 
     let needs_sudo = up_cont.remote_user != "root";
 
