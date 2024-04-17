@@ -94,20 +94,25 @@ impl DevContainer {
         exec::capturing_stdout(&args)
     }
 
-    pub fn copy_file_host_to_container(&self, src_host: &Path, dst_container: &str) -> Result<()> {
+    pub fn exec_with_stdin<S: AsRef<str>>(&self, command: &[S], stdin: Stdio) -> Result<()> {
         let workspace_folder = self.workspace_folder.to_string_lossy();
-        let src_host_file = File::open(src_host)?;
-        let cat_cmd = format!("cat > {}", dst_container);
-        let args = vec![
+        let mut args = vec![
             "devcontainer",
             "exec",
-            "--workspace_folder",
+            "--workspace-folder",
             &*workspace_folder,
-            "sh",
-            "-c",
-            &cat_cmd,
         ];
+        args.extend(command.iter().map(|s| s.as_ref()));
 
-        exec::with_stdin(&args, Stdio::from(src_host_file))
+        exec::with_stdin(&args, stdin)
+    }
+
+    pub fn copy_file_host_to_container(&self, src_host: &Path, dst_container: &str) -> Result<()> {
+        let src_host_file = File::open(src_host)?;
+
+        self.exec(&["sh", "-c", &format!("mkdir -p $(dirname {dst_container})")])?;
+
+        let cat_cmd = format!("cat > {}", dst_container);
+        self.exec_with_stdin(&["sh", "-c", &cat_cmd], Stdio::from(src_host_file))
     }
 }

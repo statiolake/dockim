@@ -1,5 +1,5 @@
-use anyhow::Result;
-use itertools::Itertools;
+use anyhow::{Context, Result};
+use itertools::{chain, Itertools};
 
 use crate::{
     cli::BuildArgs,
@@ -10,9 +10,16 @@ pub fn main(args: &BuildArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
 
     let up_cont = devcontainer_up(&dc, args.rebuild)?;
+
     let needs_sudo = up_cont.remote_user != "root";
+
     install_prerequisites(&dc, needs_sudo)?;
     install_neovim(&dc, needs_sudo)?;
+    install_github_cli(&dc)?;
+    copy_gh_config(&dc)?;
+
+    prepare_opt_dir(&dc, needs_sudo, &up_cont.remote_user)?;
+    install_dotfiles(&dc)?;
 
     Ok(())
 }
@@ -24,13 +31,18 @@ fn devcontainer_up(dc: &DevContainer, rebuild: bool) -> Result<UpOutput> {
 }
 
 fn install_prerequisites(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
-    let sudo = |args: &[&'static str]| {
-        let mut sudo = if needs_sudo { vec!["sudo"] } else { vec![] };
-        sudo.extend(args);
-        sudo
-    };
+    macro_rules! sudo {
+        ($($arg:expr),*$(,)?) => {{
+            let mut sudo = if needs_sudo { vec!["sudo".to_string()] } else { vec![] };
+            $(
+                sudo.push($arg.to_string());
+            )*
 
-    let prerequisites = [
+            sudo
+        }};
+    }
+
+    let prerequisites = &[
         "curl",
         "fzf",
         "ripgrep",
@@ -40,8 +52,6 @@ fn install_prerequisites(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
         "python3",
         "python3-pip",
         "python3-pynvim",
-        "nodejs",
-        "npm",
         "tzdata",
         "ninja-build",
         "gettext",
@@ -56,19 +66,23 @@ fn install_prerequisites(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
         "unzip",
     ];
 
-    dc.exec(&sudo(&["apt-get", "update"]))?;
-    dc.exec(&sudo(
-        &["apt-get", "-y", "install"]
-            .iter()
-            .chain(&prerequisites)
-            .copied()
-            .collect_vec(),
-    ))?;
+    dc.exec(&sudo!["apt-get", "update"])?;
+    dc.exec(
+        &chain![
+            sudo!["apt-get", "-y", "install"],
+            prerequisites.iter().map(|s| s.to_string())
+        ]
+        .collect_vec(),
+    )?;
 
     Ok(())
 }
 
 fn install_neovim(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
+    if dc.exec_capturing_stdout(&["nvim", "--version"]).is_ok() {
+        return Ok(());
+    }
+
     let sudo = |cmd: &str| {
         if needs_sudo {
             "sudo ".to_string() + cmd
@@ -98,6 +112,58 @@ fn install_neovim(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
 
     dc.exec(&["sh", "-c", &cmds.join(" && ")])?;
     dc.exec(&["rm", "-rf", "/tmp/neovim"])?;
+
+    Ok(())
+}
+
+fn install_github_cli(dc: &DevContainer) -> Result<()> {
+    dc.exec(&["sh", "-c", "curl -sS https://webi.sh/gh | sh"])
+}
+
+fn copy_gh_config(dc: &DevContainer) -> Result<()> {
+    let home_dir = dirs::home_dir().context("failed to get home directory")?;
+    let gh_config = home_dir.join(".config").join("gh").join("config.yml");
+    let gh_hosts = home_dir.join(".config").join("gh").join("hosts.yml");
+
+    if gh_config.exists() {
+        dc.copy_file_host_to_container(&gh_config, "~/.config/gh/config.yml")?;
+    }
+
+    if gh_hosts.exists() {
+        dc.copy_file_host_to_container(&gh_hosts, "~/.config/gh/hosts.yml")?;
+    }
+
+    Ok(())
+}
+
+fn prepare_opt_dir(dc: &DevContainer, needs_sudo: bool, owner_user: &str) -> Result<()> {
+    macro_rules! sudo {
+        ($($arg:expr),*$(,)?) => {{
+            let mut sudo = if needs_sudo { vec!["sudo".to_string()] } else { vec![] };
+            $(
+                sudo.push($arg.to_string());
+            )*
+
+            sudo
+        }};
+    }
+
+    let _ = dc.exec(&sudo!["rm", "-rf", "/opt"]);
+    dc.exec(&sudo!["mkdir", "-p", "/opt"])?;
+    dc.exec(&sudo![
+        "chown",
+        "-R",
+        format!("{owner_user}:{owner_user}"),
+        "/opt"
+    ])?;
+
+    Ok(())
+}
+
+fn install_dotfiles(dc: &DevContainer) -> Result<()> {
+    let _ = dc.exec(&["rm", "-rf", "/opt/dotfiles"]);
+    dc.exec(&["gh", "repo", "clone", "dotfiles", "/opt/dotfiles"])?;
+    dc.exec(&["sh", "-c", "cd /opt/dotfiles && python install.py --force"])?;
 
     Ok(())
 }
