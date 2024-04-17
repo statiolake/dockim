@@ -37,7 +37,18 @@ pub fn main(args: &Args, neovide_args: &NeovideArgs) -> Result<()> {
 
     // Run Neovide on host side
     let server = format!("localhost:{}", neovide_args.host_port);
-    let mut neovide = exec::spawn(&["neovide.exe", "--server", &server])?;
+    let neovide_binary = if exec::capturing_stdout(&["uname", "-r"])
+        .map(|out| out.contains("microsoft"))
+        .unwrap_or(false)
+    {
+        // Note that we don't have to add `.exe` on native Windows. The only case we must have the
+        // extension is when we are in WSL environment.
+        "neovide.exe"
+    } else {
+        "neovide"
+    };
+
+    let mut neovide = exec::spawn(&[neovide_binary, "--server", &server])?;
 
     neovide.wait()?;
     nvim.kill()?;
