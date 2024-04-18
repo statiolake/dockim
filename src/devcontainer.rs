@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs::File,
     path::{Path, PathBuf},
     process::{Child, Stdio},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::exec;
 
@@ -145,22 +146,40 @@ impl DevContainer {
     pub fn forward_port(&self, host_port: &str, container_port: &str) -> Result<PortForwardGuard> {
         let socat_container_name = self.socat_container_name(host_port)?;
         let up_output = self.up_and_inspect()?;
-        let container_ip = exec::capturing_stdout(&[
-            "docker",
-            "inspect",
-            "--format",
-            "{{ .NetworkSettings.Networks.bridge.IPAddress }}",
-            &up_output.container_id,
-        ])?;
+
+        #[derive(Debug, Deserialize)]
+        struct ContainerNetwork {
+            #[serde(rename = "IPAddress")]
+            ip_address: String,
+        }
+
+        let container_networks: HashMap<String, ContainerNetwork> =
+            serde_json::from_str(&exec::capturing_stdout(&[
+                "docker",
+                "inspect",
+                "--format",
+                "{{ json .NetworkSettings.Networks }}",
+                &up_output.container_id,
+            ])?)?;
+
+        let (container_network_name, container_network) = container_networks
+            .iter()
+            .next()
+            .context("failed to get container network")?;
 
         let docker_publish_port = format!("{}:1234", host_port);
-        let socat_target = format!("TCP-CONNECT:{}:{}", container_ip.trim(), container_port);
+        let socat_target = format!(
+            "TCP-CONNECT:{}:{}",
+            container_network.ip_address, container_port
+        );
 
         exec::exec(&[
             "docker",
             "run",
             "-d",
             "--rm",
+            "--net",
+            container_network_name,
             "--name",
             &socat_container_name,
             "-p",
