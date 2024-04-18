@@ -1,5 +1,6 @@
 use std::{
     fmt::Debug,
+    io::Write,
     process::{Child, Command, Stdio},
 };
 
@@ -51,6 +52,25 @@ pub fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()>
         .args(args.iter().map(|s| s.as_ref()))
         .stdin(stdin)
         .status()?;
+    ensure!(status.success(), "command failed");
+
+    Ok(())
+}
+
+pub fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -> Result<()> {
+    ensure!(!args.is_empty(), "No command provided to exec");
+
+    eprintln!("* running command (with stdin): {args:?}");
+
+    let command = args[0].as_ref();
+    let args = &args[1..];
+
+    let mut child = Command::new(command)
+        .args(args.iter().map(|s| s.as_ref()))
+        .stdin(Stdio::piped())
+        .spawn()?;
+    child.stdin.take().unwrap().write_all(bytes)?;
+    let status = child.wait()?;
     ensure!(status.success(), "command failed");
 
     Ok(())

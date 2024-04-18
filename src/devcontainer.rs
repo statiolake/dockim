@@ -120,6 +120,19 @@ impl DevContainer {
         exec::with_stdin(&args, stdin)
     }
 
+    pub fn exec_with_bytes_stdin<S: AsRef<str>>(&self, command: &[S], stdin: &[u8]) -> Result<()> {
+        let workspace_folder = self.workspace_folder.to_string_lossy();
+        let mut args = vec![
+            "devcontainer",
+            "exec",
+            "--workspace-folder",
+            &*workspace_folder,
+        ];
+        args.extend(command.iter().map(|s| s.as_ref()));
+
+        exec::with_bytes_stdin(&args, stdin)
+    }
+
     pub fn copy_file_host_to_container(&self, src_host: &Path, dst_container: &str) -> Result<()> {
         let src_host_file = File::open(src_host)?;
 

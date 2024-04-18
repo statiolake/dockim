@@ -1,9 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use itertools::{chain, Itertools};
 
 use crate::{
     cli::{Args, BuildArgs},
     devcontainer::{DevContainer, UpOutput},
+    exec,
 };
 
 pub fn main(args: &Args, build_args: &BuildArgs) -> Result<()> {
@@ -16,7 +17,7 @@ pub fn main(args: &Args, build_args: &BuildArgs) -> Result<()> {
     install_prerequisites(&dc, needs_sudo)?;
     install_neovim(&dc, needs_sudo)?;
     install_github_cli(&dc)?;
-    copy_gh_config(&dc)?;
+    login_to_gh(&dc)?;
 
     prepare_opt_dir(&dc, needs_sudo, &up_cont.remote_user)?;
     install_dotfiles(&dc)?;
@@ -108,7 +109,7 @@ fn install_neovim(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
         "/tmp/neovim",
     ])?;
 
-    let cmds = vec![
+    let cmds = [
         "cd /tmp/neovim".to_string(),
         "(git checkout v0.9.5 || true)".to_string(),
         "make -j4".to_string(),
@@ -125,18 +126,12 @@ fn install_github_cli(dc: &DevContainer) -> Result<()> {
     dc.exec(&["sh", "-c", "curl -sS https://webi.sh/gh | sh"])
 }
 
-fn copy_gh_config(dc: &DevContainer) -> Result<()> {
-    let home_dir = dirs::home_dir().context("failed to get home directory")?;
-    let gh_config = home_dir.join(".config").join("gh").join("config.yml");
-    let gh_hosts = home_dir.join(".config").join("gh").join("hosts.yml");
-
-    if gh_config.exists() {
-        dc.copy_file_host_to_container(&gh_config, "~/.config/gh/config.yml")?;
-    }
-
-    if gh_hosts.exists() {
-        dc.copy_file_host_to_container(&gh_hosts, "~/.config/gh/hosts.yml")?;
-    }
+fn login_to_gh(dc: &DevContainer) -> Result<()> {
+    let token = exec::capturing_stdout(&["gh", "auth", "token"])?;
+    dc.exec_with_bytes_stdin(
+        &["gh", "auth", "login", "--with-token"],
+        token.trim().as_bytes(),
+    )?;
 
     Ok(())
 }
