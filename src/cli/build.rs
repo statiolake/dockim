@@ -163,7 +163,7 @@ fn prepare_opt_dir(dc: &DevContainer, needs_sudo: bool, owner_user: &str) -> Res
 fn install_dotfiles(dc: &DevContainer) -> Result<()> {
     let _ = dc.exec(&["rm", "-rf", "/opt/dotfiles"]);
     dc.exec(&["gh", "repo", "clone", "dotfiles", "/opt/dotfiles"])?;
-    dc.exec(&["sh", "-c", "cd /opt/dotfiles && python install.py --force"])?;
+    dc.exec(&["sh", "-c", "cd /opt/dotfiles && python3 install.py --force"])?;
 
     Ok(())
 }
