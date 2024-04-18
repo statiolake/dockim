@@ -33,7 +33,8 @@ pub fn main(args: &Args, neovide_args: &NeovideArgs) -> Result<()> {
     ])?;
 
     // Wait for everything to start up
-    thread::sleep(Duration::from_secs(1));
+    eprintln!("* wait for 5 seconds");
+    thread::sleep(Duration::from_secs(5));
 
     // Run Neovide on host side
     let server = format!("localhost:{}", neovide_args.host_port);
@@ -51,6 +52,7 @@ pub fn main(args: &Args, neovide_args: &NeovideArgs) -> Result<()> {
     let mut neovide = exec::spawn(&neovide_args)?;
 
     neovide.wait()?;
+
     nvim.kill()?;
     nvim.wait()?;
 
