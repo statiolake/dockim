@@ -37,7 +37,8 @@ pub fn main(args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
     }
 
     // Run Neovim in container
-    let mut args = vec!["nvim".to_string()];
-    args.extend(neovim_args.args.clone());
+    // Set environment variable to indicate that we are directly running Neovim from dockim
+    let mut args = vec!["/usr/bin/env", "DIRECT_NVIM=1", "nvim"];
+    args.extend(neovim_args.args.iter().map(|s| s.as_str()));
     dc.exec(&args)
 }
