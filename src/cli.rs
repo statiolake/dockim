@@ -19,10 +19,9 @@ pub struct Args {
 pub enum Subcommand {
     Build(BuildArgs),
 
-    #[clap(alias = "nvim")]
+    #[clap(alias = "v")]
     Neovim(NeovimArgs),
 
-    #[clap(alias = "v")]
     Neovide(NeovideArgs),
 
     #[clap(alias = "sh")]
