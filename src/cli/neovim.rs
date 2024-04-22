@@ -11,10 +11,6 @@ use crate::{
 pub fn main(args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
 
-    if dc.exec(&["nvim", "--version"]).is_err() {
-        bail!("Neovim not found, build container first.");
-    }
-
     // Run csrv for clipboard support if exists
     let csrv = Command::new("csrv")
         .env("CSRV_PORT", "55232")
@@ -38,7 +34,12 @@ pub fn main(args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
 
     // Run Neovim in container
     // Set environment variable to indicate that we are directly running Neovim from dockim
-    let mut args = vec!["/usr/bin/env", "DIRECT_NVIM=1", "nvim"];
+    let mut args = vec![
+        "/usr/bin/env",
+        "DIRECT_NVIM=1",
+        "TERM=screen-256color",
+        "nvim",
+    ];
     args.extend(neovim_args.args.iter().map(|s| s.as_str()));
     dc.exec(&args)
 }
