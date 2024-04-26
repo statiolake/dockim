@@ -66,6 +66,7 @@ fn install_prerequisites(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
         "pkg-config",
         "zip",
         "unzip",
+        "git-secrets",
     ];
 
     dc.exec(&sudo!["apt-get", "update"])?;
