@@ -130,7 +130,7 @@ fn install_github_cli(dc: &DevContainer) -> Result<()> {
 fn login_to_gh(dc: &DevContainer) -> Result<()> {
     let token = exec::capturing_stdout(&["gh", "auth", "token"])?;
     dc.exec_with_bytes_stdin(
-        &["gh", "auth", "login", "--with-token"],
+        &["sh", "-c", "~/.local/bin/gh auth login --with-token"],
         token.trim().as_bytes(),
     )?;
 
@@ -163,7 +163,11 @@ fn prepare_opt_dir(dc: &DevContainer, needs_sudo: bool, owner_user: &str) -> Res
 
 fn install_dotfiles(dc: &DevContainer) -> Result<()> {
     let _ = dc.exec(&["rm", "-rf", "/opt/dotfiles"]);
-    dc.exec(&["gh", "repo", "clone", "dotfiles", "/opt/dotfiles"])?;
+    dc.exec(&[
+        "sh",
+        "-c",
+        "~/.local/bin/gh repo clone dotfiles /opt/dotfiles",
+    ])?;
     dc.exec(&["sh", "-c", "cd /opt/dotfiles && python3 install.py --force"])?;
 
     Ok(())

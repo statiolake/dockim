@@ -1,6 +1,6 @@
 use std::process::{Command, Stdio};
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use scopeguard::defer;
 
 use crate::{
