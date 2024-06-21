@@ -5,6 +5,7 @@ pub mod neovide;
 pub mod neovim;
 pub mod port;
 pub mod shell;
+pub mod up;
 
 #[derive(Debug, clap::Parser)]
 pub struct Args {
@@ -17,6 +18,8 @@ pub struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Subcommand {
+    Up(UpArgs),
+
     Build(BuildArgs),
 
     #[clap(alias = "v")]
@@ -30,6 +33,9 @@ pub enum Subcommand {
     #[clap(alias = "p")]
     Port(PortArgs),
 }
+
+#[derive(Debug, clap::Parser)]
+pub struct UpArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct BuildArgs {
