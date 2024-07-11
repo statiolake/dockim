@@ -149,7 +149,6 @@ fn prepare_opt_dir(dc: &DevContainer, needs_sudo: bool, owner_user: &str) -> Res
         }};
     }
 
-    let _ = dc.exec(&sudo!["rm", "-rf", "/opt"]);
     dc.exec(&sudo!["mkdir", "-p", "/opt"])?;
     dc.exec(&sudo![
         "chown",
