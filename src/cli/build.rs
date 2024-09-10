@@ -3,11 +3,12 @@ use miette::Result;
 
 use crate::{
     cli::{Args, BuildArgs},
+    config::Config,
     devcontainer::{DevContainer, UpOutput},
     exec,
 };
 
-pub fn main(args: &Args, build_args: &BuildArgs) -> Result<()> {
+pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
 
     let up_cont = devcontainer_up(&dc, build_args.rebuild)?;
@@ -15,12 +16,12 @@ pub fn main(args: &Args, build_args: &BuildArgs) -> Result<()> {
     let needs_sudo = up_cont.remote_user != "root";
 
     install_prerequisites(&dc, needs_sudo)?;
-    install_neovim(&dc, needs_sudo)?;
+    install_neovim(config, &dc, needs_sudo)?;
     install_github_cli(&dc)?;
     login_to_gh(&dc)?;
 
     prepare_opt_dir(&dc, needs_sudo, &up_cont.remote_user)?;
-    install_dotfiles(&dc)?;
+    install_dotfiles(config, &dc)?;
 
     Ok(())
 }
@@ -81,7 +82,7 @@ fn install_prerequisites(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
     Ok(())
 }
 
-fn install_neovim(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
+fn install_neovim(config: &Config, dc: &DevContainer, needs_sudo: bool) -> Result<()> {
     if dc
         .exec_capturing_stdout(&["/usr/local/bin/nvim", "--version"])
         .is_ok()
@@ -112,7 +113,7 @@ fn install_neovim(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
 
     let cmds = [
         "cd /tmp/neovim".to_string(),
-        "(git checkout v0.10.0 || true)".to_string(),
+        format!("(git checkout {} || true)", config.neovim_version),
         "make -j4".to_string(),
         sudo("make install"),
     ];
@@ -160,14 +161,18 @@ fn prepare_opt_dir(dc: &DevContainer, needs_sudo: bool, owner_user: &str) -> Res
     Ok(())
 }
 
-fn install_dotfiles(dc: &DevContainer) -> Result<()> {
+fn install_dotfiles(config: &Config, dc: &DevContainer) -> Result<()> {
     let _ = dc.exec(&["rm", "-rf", "/opt/dotfiles"]);
     dc.exec(&[
         "sh",
         "-c",
         "~/.local/bin/gh repo clone dotfiles /opt/dotfiles",
     ])?;
-    dc.exec(&["sh", "-c", "cd /opt/dotfiles && python3 install.py --force"])?;
+    dc.exec(&[
+        "sh",
+        "-c",
+        &format!("cd /opt/dotfiles; {}", config.dotfiles_install_command),
+    ])?;
 
     Ok(())
 }

@@ -5,11 +5,12 @@ use scopeguard::defer;
 
 use crate::{
     cli::{Args, NeovideArgs},
+    config::Config,
     devcontainer::DevContainer,
     exec, log,
 };
 
-pub fn main(args: &Args, neovide_args: &NeovideArgs) -> Result<()> {
+pub fn main(_config: &Config, args: &Args, neovide_args: &NeovideArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
 
     dc.exec(&["nvim", "--version"]).wrap_err(miette!(

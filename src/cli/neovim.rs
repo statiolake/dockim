@@ -5,11 +5,12 @@ use scopeguard::defer;
 
 use crate::{
     cli::{Args, NeovimArgs},
+    config::Config,
     devcontainer::DevContainer,
     log,
 };
 
-pub fn main(args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
+pub fn main(_config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
 
     // Run csrv for clipboard support if exists

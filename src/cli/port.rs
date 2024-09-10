@@ -5,10 +5,11 @@ use miette::{bail, Result};
 
 use crate::{
     cli::{Args, PortArgs},
+    config::Config,
     devcontainer::DevContainer,
 };
 
-pub fn main(args: &Args, port_args: &PortArgs) -> Result<()> {
+pub fn main(_config: &Config, args: &Args, port_args: &PortArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
 
     if port_args.remove_all {

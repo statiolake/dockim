@@ -1,6 +1,7 @@
 use clap::Parser;
 use dockim::{
     cli::{build, neovide, neovim, port, shell, up, Args, Subcommand},
+    config::Config,
     devcontainer::DevContainer,
     exec,
 };
@@ -9,14 +10,16 @@ use miette::{bail, Result};
 fn main() -> Result<()> {
     check_requirements()?;
 
+    let config = Config::load_config()?;
+
     let args = Args::parse();
     match &args.subcommand {
-        Subcommand::Up(up_args) => up::main(&args, up_args),
-        Subcommand::Build(build_args) => build::main(&args, build_args),
-        Subcommand::Neovim(neovim_args) => neovim::main(&args, neovim_args),
-        Subcommand::Neovide(neovide_args) => neovide::main(&args, neovide_args),
-        Subcommand::Shell(shell_args) => shell::main(&args, shell_args),
-        Subcommand::Port(port_args) => port::main(&args, port_args),
+        Subcommand::Up(up_args) => up::main(&config, &args, up_args),
+        Subcommand::Build(build_args) => build::main(&config, &args, build_args),
+        Subcommand::Neovim(neovim_args) => neovim::main(&config, &args, neovim_args),
+        Subcommand::Neovide(neovide_args) => neovide::main(&config, &args, neovide_args),
+        Subcommand::Shell(shell_args) => shell::main(&config, &args, shell_args),
+        Subcommand::Port(port_args) => port::main(&config, &args, port_args),
     }
 }
 

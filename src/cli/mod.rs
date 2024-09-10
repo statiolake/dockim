@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::config::Config;
+
 pub mod build;
 pub mod neovide;
 pub mod neovim;
@@ -32,6 +34,11 @@ pub enum Subcommand {
 
     #[clap(alias = "p")]
     Port(PortArgs),
+}
+
+#[derive(Debug, Clone)]
+pub struct Metadata {
+    pub config: Config,
 }
 
 #[derive(Debug, clap::Parser)]

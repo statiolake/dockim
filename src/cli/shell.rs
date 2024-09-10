@@ -1,10 +1,11 @@
 use crate::{
     cli::{Args, ShellArgs},
+    config::Config,
     devcontainer::DevContainer,
 };
 use miette::{miette, Result, WrapErr};
 
-pub fn main(args: &Args, shell_args: &ShellArgs) -> Result<()> {
+pub fn main(_config: &Config, args: &Args, shell_args: &ShellArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
 
     let shell = "/usr/bin/zsh";
