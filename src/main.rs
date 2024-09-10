@@ -1,10 +1,10 @@
 use clap::Parser;
-use dockim::{devcontainer::DevContainer, exec};
+use dockim::{
+    cli::{build, neovide, neovim, port, shell, up, Args, Subcommand},
+    devcontainer::DevContainer,
+    exec,
+};
 use miette::{bail, Result};
-
-use crate::cli::{build, neovide, neovim, port, shell, up, Args, Subcommand};
-
-pub mod cli;
 
 fn main() -> Result<()> {
     check_requirements()?;

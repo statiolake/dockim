@@ -1,10 +1,12 @@
 use std::mem;
 
-use dockim::devcontainer::DevContainer;
 use itertools::Itertools;
 use miette::{bail, Result};
 
-use crate::cli::{Args, PortArgs};
+use crate::{
+    cli::{Args, PortArgs},
+    devcontainer::DevContainer,
+};
 
 pub fn main(args: &Args, port_args: &PortArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
