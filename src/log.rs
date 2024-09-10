@@ -15,7 +15,7 @@ macro_rules! log {
 pub fn log<D: Display>(kind: &str, note: Option<&str>, msg: D) {
     eprint!("{:>10}", kind.bright_green());
     if let Some(note) = note {
-        eprint!(" ({})", note.bright_black());
+        eprint!("{}", format!(" ({note})").bright_black());
     }
     eprintln!(" {}", msg);
 }
