@@ -6,6 +6,7 @@ use scopeguard::defer;
 use crate::{
     cli::{Args, NeovimArgs},
     devcontainer::DevContainer,
+    log,
 };
 
 pub fn main(args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
@@ -21,14 +22,14 @@ pub fn main(args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
         .ok();
 
     if csrv.is_some() {
-        eprintln!("* csrv started");
+        log!("Started": "csrv");
     }
 
     defer! {
         if let Some(mut csrv) = csrv {
             let _ = csrv.kill();
             let _ = csrv.wait();
-            eprintln!("* csrv stopped")
+            log!("Stopped": "csrv");
         }
     }
 

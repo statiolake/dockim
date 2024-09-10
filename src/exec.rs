@@ -6,10 +6,12 @@ use std::{
 
 use miette::{ensure, IntoDiagnostic, Result, WrapErr};
 
+use crate::log;
+
 pub fn spawn<S: AsRef<str> + Debug>(args: &[S]) -> Result<Child> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
-    eprintln!("* running command: {args:?}");
+    log!("Running": "{args:?}");
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -29,7 +31,7 @@ pub fn spawn<S: AsRef<str> + Debug>(args: &[S]) -> Result<Child> {
 pub fn exec<S: AsRef<str> + Debug>(args: &[S]) -> Result<()> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
-    eprintln!("* running command: {args:?}");
+    log!("Running": "{args:?}");
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -50,7 +52,7 @@ pub fn exec<S: AsRef<str> + Debug>(args: &[S]) -> Result<()> {
 pub fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
-    eprintln!("* running command (with stdin): {args:?}");
+    log!("Running" ("with stdin"): "{args:?}");
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -72,7 +74,7 @@ pub fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()>
 pub fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -> Result<()> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
-    eprintln!("* running command (with stdin): {args:?}");
+    log!("Running" ("with stdin"): "{args:?}");
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -104,7 +106,7 @@ pub fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -> Resu
 pub fn capturing_stdout<S: AsRef<str> + Debug>(args: &[S]) -> Result<String> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
-    eprintln!("* running command (with capture): {args:?}");
+    log!("Running" ("with capture"): "{args:?}");
 
     let command = args[0].as_ref();
     let args = &args[1..];

@@ -6,7 +6,7 @@ use scopeguard::defer;
 use crate::{
     cli::{Args, NeovideArgs},
     devcontainer::DevContainer,
-    exec,
+    exec, log,
 };
 
 pub fn main(args: &Args, neovide_args: &NeovideArgs) -> Result<()> {
@@ -34,7 +34,7 @@ pub fn main(args: &Args, neovide_args: &NeovideArgs) -> Result<()> {
     ])?;
 
     // Wait for everything to start up
-    eprintln!("* wait for 5 seconds");
+    log!("Waiting": "5 seconds");
     thread::sleep(Duration::from_secs(5));
 
     // Run Neovide on host side
