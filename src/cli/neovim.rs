@@ -1,6 +1,6 @@
 use std::process::{Command, Stdio};
 
-use anyhow::Result;
+use miette::Result;
 use scopeguard::defer;
 
 use crate::{

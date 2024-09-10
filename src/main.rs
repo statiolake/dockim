@@ -1,9 +1,9 @@
-use anyhow::{ensure, Result};
 use clap::Parser;
 use dockim::{
     cli::{build, neovide, neovim, port, shell, up, Args, Subcommand},
     devcontainer::DevContainer,
 };
+use miette::{bail, Result};
 
 fn main() -> Result<()> {
     check_requirements()?;
@@ -20,10 +20,15 @@ fn main() -> Result<()> {
 }
 
 fn check_requirements() -> Result<()> {
-    ensure!(
-        DevContainer::is_devcontainer_installed(),
-        "devcontainer CLI is not installed. Run `npm install -g @devcontainers/cli` to install it. See also: https://github.com/devcontainers/cli",
-    );
+    if !DevContainer::is_devcontainer_installed() {
+        bail!(
+            help = concat!(
+                "Run `npm install -g @devcontainers/cli` to install it\n",
+                "See also: https://github.com/devcontainers/cli",
+            ),
+            "devcontainer CLI is not installed",
+        );
+    }
 
     Ok(())
 }

@@ -2,7 +2,7 @@ use crate::{
     cli::{Args, ShellArgs},
     devcontainer::DevContainer,
 };
-use anyhow::Result;
+use miette::Result;
 
 pub fn main(args: &Args, shell_args: &ShellArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());

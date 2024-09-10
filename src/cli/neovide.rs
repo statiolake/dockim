@@ -1,6 +1,6 @@
 use std::{thread, time::Duration};
 
-use anyhow::{bail, Result};
+use miette::{bail, IntoDiagnostic, Result};
 use scopeguard::defer;
 
 use crate::{
@@ -51,10 +51,10 @@ pub fn main(args: &Args, neovide_args: &NeovideArgs) -> Result<()> {
     };
     let mut neovide = exec::spawn(&neovide_args)?;
 
-    neovide.wait()?;
+    neovide.wait().into_diagnostic()?;
 
-    nvim.kill()?;
-    nvim.wait()?;
+    nvim.kill().into_diagnostic()?;
+    nvim.wait().into_diagnostic()?;
 
     Ok(())
 }

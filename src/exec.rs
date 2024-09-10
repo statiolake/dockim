@@ -4,7 +4,7 @@ use std::{
     process::{Child, Command, Stdio},
 };
 
-use anyhow::{ensure, Result};
+use miette::{ensure, IntoDiagnostic, Result};
 
 pub fn spawn<S: AsRef<str> + Debug>(args: &[S]) -> Result<Child> {
     ensure!(!args.is_empty(), "No command provided to exec");
@@ -19,7 +19,8 @@ pub fn spawn<S: AsRef<str> + Debug>(args: &[S]) -> Result<Child> {
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .spawn()?;
+        .spawn()
+        .into_diagnostic()?;
 
     Ok(child)
 }
@@ -34,7 +35,8 @@ pub fn exec<S: AsRef<str> + Debug>(args: &[S]) -> Result<()> {
 
     let status = Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
-        .status()?;
+        .status()
+        .into_diagnostic()?;
     ensure!(status.success(), "command failed");
 
     Ok(())
@@ -51,7 +53,8 @@ pub fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()>
     let status = Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
         .stdin(stdin)
-        .status()?;
+        .status()
+        .into_diagnostic()?;
     ensure!(status.success(), "command failed");
 
     Ok(())
@@ -68,9 +71,15 @@ pub fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -> Resu
     let mut child = Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
         .stdin(Stdio::piped())
-        .spawn()?;
-    child.stdin.take().unwrap().write_all(bytes)?;
-    let status = child.wait()?;
+        .spawn()
+        .into_diagnostic()?;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(bytes)
+        .into_diagnostic()?;
+    let status = child.wait().into_diagnostic()?;
     ensure!(status.success(), "command failed");
 
     Ok(())
@@ -86,7 +95,8 @@ pub fn capturing_stdout<S: AsRef<str> + Debug>(args: &[S]) -> Result<String> {
 
     let out = Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
-        .output()?;
+        .output()
+        .into_diagnostic()?;
     ensure!(out.status.success(), "command failed");
 
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();

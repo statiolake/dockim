@@ -1,3 +1,4 @@
+use miette::{miette, IntoDiagnostic};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -6,7 +7,7 @@ use std::{
     process::{Child, Stdio},
 };
 
-use anyhow::{Context, Result};
+use miette::Result;
 
 use crate::exec;
 
@@ -66,7 +67,7 @@ impl DevContainer {
         ];
 
         exec::capturing_stdout(&args)
-            .and_then(|output| serde_json::from_str(&output).map_err(Into::into))
+            .and_then(|output| serde_json::from_str(&output).into_diagnostic())
     }
 
     pub fn spawn<S: AsRef<str>>(&self, command: &[S]) -> Result<Child> {
@@ -135,7 +136,7 @@ impl DevContainer {
     }
 
     pub fn copy_file_host_to_container(&self, src_host: &Path, dst_container: &str) -> Result<()> {
-        let src_host_file = File::open(src_host)?;
+        let src_host_file = File::open(src_host).into_diagnostic()?;
 
         self.exec(&["sh", "-c", &format!("mkdir -p $(dirname {dst_container})")])?;
 
@@ -160,12 +161,13 @@ impl DevContainer {
                 "--format",
                 "{{ json .NetworkSettings.Networks }}",
                 &up_output.container_id,
-            ])?)?;
+            ])?)
+            .into_diagnostic()?;
 
         let (container_network_name, container_network) = container_networks
             .iter()
             .next()
-            .context("failed to get container network")?;
+            .ok_or_else(|| miette!("failed to get container network"))?;
 
         let docker_publish_port = format!("{}:1234", host_port);
         let socat_target = format!(
@@ -206,7 +208,7 @@ impl DevContainer {
         let port_forward_containers =
             exec::capturing_stdout(&["docker", "ps", "-aq", "--filter", &name_filter])?;
 
-        let stop = |container_id: &str| exec::exec(&["docker", "stop", &container_id]);
+        let stop = |container_id: &str| exec::exec(&["docker", "stop", container_id]);
         for port_forward_container in port_forward_containers.split_whitespace() {
             stop(port_forward_container)?;
         }
