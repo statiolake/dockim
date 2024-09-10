@@ -2,6 +2,7 @@ use clap::Parser;
 use dockim::{
     cli::{build, neovide, neovim, port, shell, up, Args, Subcommand},
     devcontainer::DevContainer,
+    exec,
 };
 use miette::{bail, Result};
 
@@ -23,10 +24,17 @@ fn check_requirements() -> Result<()> {
     if !DevContainer::is_cli_installed() {
         bail!(
             help = concat!(
-                "Run `npm install -g @devcontainers/cli` to install it\n",
-                "See also: https://github.com/devcontainers/cli",
+                "run `npm install -g @devcontainers/cli` to install it\n",
+                "see also: https://github.com/devcontainers/cli",
             ),
             "devcontainer CLI is not installed",
+        );
+    }
+
+    if exec::exec(&["docker", "--version"]).is_err() {
+        bail!(
+            help = "install or start Docker Desktop first",
+            "Docker is not installed or not running",
         );
     }
 
