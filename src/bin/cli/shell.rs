@@ -1,8 +1,7 @@
-use crate::{
-    cli::{Args, ShellArgs},
-    devcontainer::DevContainer,
-};
+use dockim::devcontainer::DevContainer;
 use miette::{miette, Result, WrapErr};
+
+use crate::cli::{Args, ShellArgs};
 
 pub fn main(args: &Args, shell_args: &ShellArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());

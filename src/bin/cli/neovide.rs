@@ -1,13 +1,10 @@
 use std::{thread, time::Duration};
 
+use dockim::{devcontainer::DevContainer, exec, log};
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
 use scopeguard::defer;
 
-use crate::{
-    cli::{Args, NeovideArgs},
-    devcontainer::DevContainer,
-    exec, log,
-};
+use crate::cli::{Args, NeovideArgs};
 
 pub fn main(args: &Args, neovide_args: &NeovideArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());

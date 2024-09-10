@@ -1,8 +1,8 @@
 use miette::Result;
 
-use crate::devcontainer::DevContainer;
+use dockim::devcontainer::DevContainer;
 
-use super::{Args, UpArgs};
+use crate::cli::{Args, UpArgs};
 
 pub fn main(args: &Args, _up_args: &UpArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());

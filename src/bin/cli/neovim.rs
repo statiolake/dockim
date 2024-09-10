@@ -1,13 +1,10 @@
 use std::process::{Command, Stdio};
 
+use dockim::{devcontainer::DevContainer, log};
 use miette::Result;
 use scopeguard::defer;
 
-use crate::{
-    cli::{Args, NeovimArgs},
-    devcontainer::DevContainer,
-    log,
-};
+use crate::cli::{Args, NeovimArgs};
 
 pub fn main(args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());

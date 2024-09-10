@@ -1,11 +1,11 @@
-use itertools::{chain, Itertools};
-use miette::Result;
-
-use crate::{
-    cli::{Args, BuildArgs},
+use dockim::{
     devcontainer::{DevContainer, UpOutput},
     exec,
 };
+use itertools::{chain, Itertools};
+use miette::Result;
+
+use crate::cli::{Args, BuildArgs};
 
 pub fn main(args: &Args, build_args: &BuildArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
