@@ -4,7 +4,7 @@ use std::{
     process::{Child, Command, Stdio},
 };
 
-use miette::{ensure, IntoDiagnostic, Result};
+use miette::{ensure, IntoDiagnostic, Result, WrapErr};
 
 pub fn spawn<S: AsRef<str> + Debug>(args: &[S]) -> Result<Child> {
     ensure!(!args.is_empty(), "No command provided to exec");
@@ -20,7 +20,8 @@ pub fn spawn<S: AsRef<str> + Debug>(args: &[S]) -> Result<Child> {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
-        .into_diagnostic()?;
+        .into_diagnostic()
+        .wrap_err("spawn failed")?;
 
     Ok(child)
 }
@@ -36,14 +37,18 @@ pub fn exec<S: AsRef<str> + Debug>(args: &[S]) -> Result<()> {
     let status = Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
         .status()
-        .into_diagnostic()?;
-    ensure!(status.success(), "command failed");
+        .into_diagnostic()
+        .wrap_err("exec failed")?;
+    ensure!(
+        status.success(),
+        "devcontainer CLI returned non-successful status"
+    );
 
     Ok(())
 }
 
 pub fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()> {
-    ensure!(!args.is_empty(), "No command provided to exec");
+    ensure!(!args.is_empty(), "no command provided to exec");
 
     eprintln!("* running command (with stdin): {args:?}");
 
@@ -54,14 +59,18 @@ pub fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()>
         .args(args.iter().map(|s| s.as_ref()))
         .stdin(stdin)
         .status()
-        .into_diagnostic()?;
-    ensure!(status.success(), "command failed");
+        .into_diagnostic()
+        .wrap_err("exec failed")?;
+    ensure!(
+        status.success(),
+        "devcontainer CLI returned non-successful status"
+    );
 
     Ok(())
 }
 
 pub fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -> Result<()> {
-    ensure!(!args.is_empty(), "No command provided to exec");
+    ensure!(!args.is_empty(), "no command provided to exec");
 
     eprintln!("* running command (with stdin): {args:?}");
 
@@ -78,15 +87,22 @@ pub fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -> Resu
         .take()
         .unwrap()
         .write_all(bytes)
-        .into_diagnostic()?;
-    let status = child.wait().into_diagnostic()?;
-    ensure!(status.success(), "command failed");
+        .into_diagnostic()
+        .wrap_err("failed to write to child stdin")?;
+    let status = child
+        .wait()
+        .into_diagnostic()
+        .wrap_err("failed to wait child process to finish")?;
+    ensure!(
+        status.success(),
+        "devcontainer CLI returned non-successful status"
+    );
 
     Ok(())
 }
 
 pub fn capturing_stdout<S: AsRef<str> + Debug>(args: &[S]) -> Result<String> {
-    ensure!(!args.is_empty(), "No command provided to exec");
+    ensure!(!args.is_empty(), "no command provided to exec");
 
     eprintln!("* running command (with capture): {args:?}");
 
@@ -96,8 +112,12 @@ pub fn capturing_stdout<S: AsRef<str> + Debug>(args: &[S]) -> Result<String> {
     let out = Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
         .output()
-        .into_diagnostic()?;
-    ensure!(out.status.success(), "command failed");
+        .into_diagnostic()
+        .wrap_err("exec failed")?;
+    ensure!(
+        out.status.success(),
+        "devcontainer CLI returned non-successful status"
+    );
 
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
 

@@ -2,18 +2,18 @@ use crate::{
     cli::{Args, ShellArgs},
     devcontainer::DevContainer,
 };
-use miette::Result;
+use miette::{miette, Result, WrapErr};
 
 pub fn main(args: &Args, shell_args: &ShellArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
 
-    if shell_args.args.is_empty() {
-        dc.exec(&["/usr/bin/zsh"])?;
-    } else {
-        let mut args = vec!["/usr/bin/zsh"];
-        args.extend(shell_args.args.iter().map(|s| s.as_str()));
-        dc.exec(&args)?;
-    }
+    let shell = "/usr/bin/zsh";
+    let mut args = vec![shell];
+    args.extend(shell_args.args.iter().map(|s| s.as_str()));
+    dc.exec(&args).wrap_err(miette!(
+        help = "try `dockim build --rebuild` first",
+        "failed to execute `{shell}` on the container"
+    ))?;
 
     Ok(())
 }

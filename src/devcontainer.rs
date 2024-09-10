@@ -1,4 +1,4 @@
-use miette::{miette, IntoDiagnostic};
+use miette::{miette, IntoDiagnostic, WrapErr};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -136,17 +136,35 @@ impl DevContainer {
     }
 
     pub fn copy_file_host_to_container(&self, src_host: &Path, dst_container: &str) -> Result<()> {
-        let src_host_file = File::open(src_host).into_diagnostic()?;
+        let src_host_file = File::open(src_host)
+            .into_diagnostic()
+            .wrap_err_with(|| miette!("failed to open {}", src_host.display()))?;
 
-        self.exec(&["sh", "-c", &format!("mkdir -p $(dirname {dst_container})")])?;
+        self.exec(&["sh", "-c", &format!("mkdir -p $(dirname {dst_container})")])
+            .wrap_err_with(|| {
+                miette!(
+                    "failed to create parent directory of `{}` on container",
+                    dst_container,
+                )
+            })?;
 
         let cat_cmd = format!("cat > {}", dst_container);
         self.exec_with_stdin(&["sh", "-c", &cat_cmd], Stdio::from(src_host_file))
+            .wrap_err_with(|| {
+                miette!(
+                    "failed to write file contents to `{}` on container",
+                    dst_container
+                )
+            })
     }
 
     pub fn forward_port(&self, host_port: &str, container_port: &str) -> Result<PortForwardGuard> {
-        let socat_container_name = self.socat_container_name(host_port)?;
-        let up_output = self.up_and_inspect()?;
+        let socat_container_name = self
+            .socat_container_name(host_port)
+            .wrap_err("failed to determine port-forwarding container name")?;
+        let up_output = self
+            .up_and_inspect()
+            .wrap_err("failed to get devcontainer status")?;
 
         #[derive(Debug, Deserialize)]
         struct ContainerNetwork {
@@ -162,7 +180,8 @@ impl DevContainer {
                 "{{ json .NetworkSettings.Networks }}",
                 &up_output.container_id,
             ])?)
-            .into_diagnostic()?;
+            .into_diagnostic()
+            .wrap_err("failed to parse container network settings")?;
 
         let (container_network_name, container_network) = container_networks
             .iter()
@@ -189,7 +208,8 @@ impl DevContainer {
             "alpine/socat",
             "TCP-LISTEN:1234,fork",
             &socat_target,
-        ])?;
+        ])
+        .context("failed to launch port-forwarding container")?;
 
         Ok(PortForwardGuard {
             socat_container_name,
@@ -197,27 +217,34 @@ impl DevContainer {
     }
 
     pub fn stop_forward_port(&self, host_port: &str) -> Result<()> {
-        let socat_container_name = self.socat_container_name(host_port)?;
+        let socat_container_name = self
+            .socat_container_name(host_port)
+            .wrap_err("failed to determine port-forwarding container name")?;
         exec::exec(&["docker", "stop", &socat_container_name])
     }
 
     pub fn remove_all_forwarded_ports(&self) -> Result<()> {
-        let socat_container_name_prefix = self.socat_container_name("")?;
+        let socat_container_name_prefix = self
+            .socat_container_name("")
+            .wrap_err("failed to determine port-forwarding container name")?;
 
         let name_filter = format!("name={socat_container_name_prefix}");
         let port_forward_containers =
-            exec::capturing_stdout(&["docker", "ps", "-aq", "--filter", &name_filter])?;
+            exec::capturing_stdout(&["docker", "ps", "-aq", "--filter", &name_filter])
+                .wrap_err("failed to enumerate port-forwarding containers")?;
 
         let stop = |container_id: &str| exec::exec(&["docker", "stop", container_id]);
         for port_forward_container in port_forward_containers.split_whitespace() {
-            stop(port_forward_container)?;
+            stop(port_forward_container).wrap_err("failed to stop port-forwarding container")?;
         }
 
         Ok(())
     }
 
     fn socat_container_name(&self, host_port: &str) -> Result<String> {
-        let up_output = self.up_and_inspect()?;
+        let up_output = self
+            .up_and_inspect()
+            .wrap_err("failed to get devcontainer status")?;
 
         Ok(format!(
             "dockim-{}-socat-{}",

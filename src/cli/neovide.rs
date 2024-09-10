@@ -1,6 +1,6 @@
 use std::{thread, time::Duration};
 
-use miette::{bail, IntoDiagnostic, Result};
+use miette::{miette, IntoDiagnostic, Result, WrapErr};
 use scopeguard::defer;
 
 use crate::{
@@ -12,9 +12,10 @@ use crate::{
 pub fn main(args: &Args, neovide_args: &NeovideArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
 
-    if dc.exec(&["nvim", "--version"]).is_err() {
-        bail!("Neovim not found, build container first.");
-    }
+    dc.exec(&["nvim", "--version"]).wrap_err(miette!(
+        help = "try `dockim build --rebuild` first",
+        "Neovim not found"
+    ))?;
 
     let listen = format!("0.0.0.0:{}", neovide_args.container_port);
 
