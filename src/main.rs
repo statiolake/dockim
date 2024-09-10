@@ -20,7 +20,7 @@ fn main() -> Result<()> {
 }
 
 fn check_requirements() -> Result<()> {
-    if !DevContainer::is_devcontainer_installed() {
+    if !DevContainer::is_cli_installed() {
         bail!(
             help = concat!(
                 "Run `npm install -g @devcontainers/cli` to install it\n",
