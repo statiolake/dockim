@@ -112,7 +112,7 @@ fn install_neovim(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
 
     let cmds = [
         "cd /tmp/neovim".to_string(),
-        "(git checkout v0.9.5 || true)".to_string(),
+        "(git checkout v0.10.0 || true)".to_string(),
         "make -j4".to_string(),
         sudo("make install"),
     ];
