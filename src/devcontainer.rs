@@ -30,7 +30,7 @@ pub struct DevContainer {
 }
 
 impl DevContainer {
-    pub fn is_executable() -> bool {
+    pub fn is_devcontainer_installed() -> bool {
         exec::capturing_stdout(&["devcontainer"]).is_ok()
     }
 

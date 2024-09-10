@@ -1,8 +1,13 @@
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use clap::Parser;
-use dockim::cli::{build, neovide, neovim, port, shell, up, Args, Subcommand};
+use dockim::{
+    cli::{build, neovide, neovim, port, shell, up, Args, Subcommand},
+    devcontainer::DevContainer,
+};
 
 fn main() -> Result<()> {
+    check_requirements()?;
+
     let args = Args::parse();
     match &args.subcommand {
         Subcommand::Up(up_args) => up::main(&args, up_args),
@@ -12,4 +17,13 @@ fn main() -> Result<()> {
         Subcommand::Shell(shell_args) => shell::main(&args, shell_args),
         Subcommand::Port(port_args) => port::main(&args, port_args),
     }
+}
+
+fn check_requirements() -> Result<()> {
+    ensure!(
+        DevContainer::is_devcontainer_installed(),
+        "devcontainer CLI is not installed. Run `npm install -g @devcontainers/cli` to install it. See also: https://github.com/devcontainers/cli",
+    );
+
+    Ok(())
 }
