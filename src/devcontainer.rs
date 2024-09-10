@@ -31,8 +31,8 @@ pub struct DevContainer {
 }
 
 impl DevContainer {
-    pub fn is_devcontainer_installed() -> bool {
-        exec::capturing_stdout(&["devcontainer"]).is_ok()
+    pub fn is_cli_installed() -> bool {
+        exec::exec(&["devcontainer", "--version"]).is_ok()
     }
 
     pub fn new(workspace_folder: Option<PathBuf>) -> Self {
