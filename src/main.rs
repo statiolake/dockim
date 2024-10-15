@@ -1,6 +1,6 @@
 use clap::Parser;
 use dockim::{
-    cli::{build, neovide, neovim, port, shell, up, Args, Subcommand},
+    cli::{build, exec as cli_exec, neovide, neovim, port, shell, up, Args, Subcommand},
     config::Config,
     devcontainer::DevContainer,
     exec,
@@ -19,6 +19,7 @@ fn main() -> Result<()> {
         Subcommand::Neovim(neovim_args) => neovim::main(&config, &args, neovim_args),
         Subcommand::Neovide(neovide_args) => neovide::main(&config, &args, neovide_args),
         Subcommand::Shell(shell_args) => shell::main(&config, &args, shell_args),
+        Subcommand::Exec(exec_args) => cli_exec::main(&config, &args, exec_args),
         Subcommand::Port(port_args) => port::main(&config, &args, port_args),
     }
 }

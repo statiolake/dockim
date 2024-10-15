@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::config::Config;
 
 pub mod build;
+pub mod exec;
 pub mod neovide;
 pub mod neovim;
 pub mod port;
@@ -31,6 +32,8 @@ pub enum Subcommand {
 
     #[clap(alias = "sh")]
     Shell(ShellArgs),
+
+    Exec(ExecArgs),
 
     #[clap(alias = "p")]
     Port(PortArgs),
@@ -66,6 +69,11 @@ pub struct NeovideArgs {
 
 #[derive(Debug, clap::Parser)]
 pub struct ShellArgs {
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, clap::Parser)]
+pub struct ExecArgs {
     pub args: Vec<String>,
 }
 
