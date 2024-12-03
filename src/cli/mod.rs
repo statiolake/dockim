@@ -48,7 +48,10 @@ pub struct Metadata {
 }
 
 #[derive(Debug, clap::Parser)]
-pub struct UpArgs {}
+pub struct UpArgs {
+    #[clap(long)]
+    pub rebuild: bool,
+}
 
 #[derive(Debug, clap::Parser)]
 pub struct BuildArgs {
