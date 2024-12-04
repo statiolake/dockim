@@ -1,5 +1,6 @@
+use dirs::home_dir;
 use itertools::{chain, Itertools};
-use miette::Result;
+use miette::{miette, Result, WrapErr};
 
 use crate::{
     cli::{Args, BuildArgs},
@@ -19,6 +20,7 @@ pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> 
     install_neovim(config, &dc, needs_sudo)?;
     install_github_cli(&dc)?;
     login_to_gh(&dc)?;
+    copy_copilot(&dc)?;
 
     prepare_opt_dir(&dc, needs_sudo, &up_cont.remote_user)?;
     install_dotfiles(config, &dc)?;
@@ -134,6 +136,29 @@ fn login_to_gh(dc: &DevContainer) -> Result<()> {
         &["sh", "-c", "~/.local/bin/gh auth login --with-token"],
         token.trim().as_bytes(),
     )?;
+
+    Ok(())
+}
+
+fn copy_copilot(dc: &DevContainer) -> Result<()> {
+    dc.exec(&["sh", "-c", "mkdir -p ~/.config/github-copilot"])?;
+
+    let local_home = home_dir().ok_or_else(|| miette!("failed to get local home directory"))?;
+    let remote_home = dc
+        .exec_capturing_stdout(&["sh", "-c", "readlink -f $(echo $HOME)"])
+        .wrap_err("failed to get remote home directory")?
+        .trim()
+        .to_string();
+
+    for file in ["apps.json", "hosts.json", "versions.json"] {
+        let local_path = local_home.join(".config").join("github-copilot").join(file);
+        if !local_path.exists() {
+            continue;
+        }
+
+        let remote_path = format!("{remote_home}/.config/github-copilot/{file}");
+        dc.copy_file_host_to_container(&local_path, &remote_path)?;
+    }
 
     Ok(())
 }
