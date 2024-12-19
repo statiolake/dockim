@@ -41,7 +41,7 @@ impl DevContainer {
         }
     }
 
-    pub fn up(&self, rebuild: bool) -> Result<()> {
+    pub fn up(&self, rebuild: bool, build_no_cache: bool) -> Result<()> {
         let workspace_folder = self.workspace_folder.to_string_lossy();
         let mut args = vec![
             "devcontainer",
@@ -52,6 +52,10 @@ impl DevContainer {
 
         if rebuild {
             args.push("--remove-existing-container");
+        }
+
+        if build_no_cache {
+            args.push("--build-no-cache");
         }
 
         exec::exec(&args)

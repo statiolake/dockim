@@ -12,7 +12,7 @@ use crate::{
 pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone());
 
-    let up_cont = devcontainer_up(&dc, build_args.rebuild)?;
+    let up_cont = devcontainer_up(&dc, build_args.rebuild, build_args.no_cache)?;
 
     let needs_sudo = up_cont.remote_user != "root";
 
@@ -28,8 +28,8 @@ pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> 
     Ok(())
 }
 
-fn devcontainer_up(dc: &DevContainer, rebuild: bool) -> Result<UpOutput> {
-    dc.up(rebuild)?;
+fn devcontainer_up(dc: &DevContainer, rebuild: bool, no_cache: bool) -> Result<UpOutput> {
+    dc.up(rebuild, no_cache)?;
 
     dc.up_and_inspect()
 }

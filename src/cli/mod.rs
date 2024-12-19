@@ -51,12 +51,18 @@ pub struct Metadata {
 pub struct UpArgs {
     #[clap(long)]
     pub rebuild: bool,
+
+    #[clap(long)]
+    pub build_no_cache: bool,
 }
 
 #[derive(Debug, clap::Parser)]
 pub struct BuildArgs {
     #[clap(long)]
     pub rebuild: bool,
+
+    #[clap(long)]
+    pub no_cache: bool,
 }
 
 #[derive(Debug, clap::Parser)]
