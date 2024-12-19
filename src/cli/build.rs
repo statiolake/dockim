@@ -72,6 +72,9 @@ fn install_prerequisites(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
         "git-secrets",
     ];
 
+    // Sometimes apt-get update fails without 777 permissions on /tmp
+    dc.exec(&sudo!["mkdir", "-p", "/tmp"])?;
+    dc.exec(&sudo!["chmod", "777", "/tmp"])?;
     dc.exec(&sudo!["apt-get", "update"])?;
     dc.exec(
         &chain![
