@@ -16,6 +16,7 @@ pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> 
 
     let needs_sudo = up_cont.remote_user != "root";
 
+    enable_host_docker_internal_in_rancher_desktop_on_lima(&dc)?;
     install_prerequisites(&dc, needs_sudo)?;
     install_neovim(config, &dc, needs_sudo)?;
     install_github_cli(&dc)?;
@@ -24,6 +25,51 @@ pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> 
 
     prepare_opt_dir(&dc, needs_sudo, &up_cont.remote_user)?;
     install_dotfiles(config, &dc)?;
+
+    Ok(())
+}
+
+fn enable_host_docker_internal_in_rancher_desktop_on_lima(dc: &DevContainer) -> Result<()> {
+    if exec::exec(&["rdctl", "version"]).is_err() {
+        // Not using Rancher Desktop, skipping
+        return Ok(());
+    }
+
+    let container_hosts = dc
+        .exec_capturing_stdout(&["cat", "/etc/hosts"])
+        .wrap_err("failed to read /etc/hosts")?;
+
+    if container_hosts.contains("host.docker.internal") {
+        // host.docker.internal already exists in /etc/hosts, skipping
+        return Ok(());
+    }
+
+    let host_ip_addr = {
+        let vm_hosts = exec::capturing_stdout(&["rdctl", "shell", "cat", "/etc/hosts"])
+            .wrap_err("failed to read /etc/hosts on Rancher Desktop VM")?;
+        let Some(ip_addr) = vm_hosts.lines().find_map(|line| {
+            let parts = line.split_whitespace().collect_vec();
+            if parts[1] == "host.lima.internal" {
+                Some(parts[0].to_string())
+            } else {
+                None
+            }
+        }) else {
+            // host.lima.internal not found in /etc/hosts, skipping
+            return Ok(());
+        };
+
+        ip_addr
+    };
+
+    dc.exec(&[
+        "sh",
+        "-c",
+        &format!(
+            "echo '{host_ip_addr} host.docker.internal' | tee -a /etc/hosts",
+            host_ip_addr = host_ip_addr
+        ),
+    ])?;
 
     Ok(())
 }
