@@ -35,6 +35,14 @@ fn enable_host_docker_internal_in_rancher_desktop_on_lima(dc: &DevContainer) -> 
         return Ok(());
     }
 
+    if dc
+        .exec_capturing_stdout(&["whoami"])
+        .map_or(false, |user| user.trim() != "root")
+    {
+        // Skip if not running as root
+        return Ok(());
+    }
+
     let container_hosts = dc
         .exec_capturing_stdout(&["cat", "/etc/hosts"])
         .wrap_err("failed to read /etc/hosts")?;
