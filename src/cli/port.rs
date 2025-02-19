@@ -1,7 +1,7 @@
 use std::mem;
 
 use itertools::Itertools;
-use miette::{bail, Result};
+use miette::{bail, Context, Result};
 
 use crate::{
     cli::{Args, PortArgs},
@@ -10,7 +10,8 @@ use crate::{
 };
 
 pub fn main(_config: &Config, args: &Args, port_args: &PortArgs) -> Result<()> {
-    let dc = DevContainer::new(args.workspace_folder.clone());
+    let dc = DevContainer::new(args.workspace_folder.clone())
+        .wrap_err("failed to initialize devcontainer client")?;
 
     if port_args.remove_all {
         dc.remove_all_forwarded_ports()?;

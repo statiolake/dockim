@@ -1,13 +1,14 @@
-use miette::{miette, IntoDiagnostic, WrapErr};
+use miette::{miette, IntoDiagnostic, Result, WrapErr};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{
     collections::HashMap,
-    fs::File,
+    fs::{self, File},
+    io::Write,
     path::{Path, PathBuf},
     process::{Child, Stdio},
 };
-
-use miette::Result;
+use tempfile::{NamedTempFile, TempPath};
 
 use crate::exec;
 
@@ -25,9 +26,22 @@ pub struct UpOutput {
     pub remote_workspace_folder: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DevContainer {
     workspace_folder: PathBuf,
+    override_config_for_root: TempPath,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RootMode {
+    Yes,
+    No,
+}
+
+impl RootMode {
+    pub fn is_required(self) -> bool {
+        matches!(self, RootMode::Yes)
+    }
 }
 
 impl DevContainer {
@@ -35,10 +49,40 @@ impl DevContainer {
         exec::exec(&["devcontainer", "--version"]).is_ok()
     }
 
-    pub fn new(workspace_folder: Option<PathBuf>) -> Self {
-        DevContainer {
+    pub fn new(workspace_folder: Option<PathBuf>) -> Result<Self> {
+        let mut override_config_for_root =
+            NamedTempFile::new().expect("failed to create temp file for overriding remote user");
+
+        let mut config: Value = serde_hjson::from_str(
+            &fs::read_to_string(
+                workspace_folder
+                    .as_deref()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join(".devcontainer")
+                    .join("devcontainer.json"),
+            )
+            .into_diagnostic()
+            .wrap_err("failed to read devcontainer.json")?,
+        )
+        .into_diagnostic()
+        .wrap_err("failed to parse devcontainer.json")?;
+
+        config["remoteUser"] = "root".into();
+
+        override_config_for_root
+            .write_all(
+                serde_json::to_string(&config)
+                    .into_diagnostic()
+                    .wrap_err("failed to format config")?
+                    .as_bytes(),
+            )
+            .into_diagnostic()
+            .wrap_err("failed to write to override config")?;
+
+        Ok(DevContainer {
             workspace_folder: workspace_folder.unwrap_or_else(|| PathBuf::from(".")),
-        }
+            override_config_for_root: override_config_for_root.into_temp_path(),
+        })
     }
 
     pub fn up(&self, rebuild: bool, build_no_cache: bool) -> Result<()> {
@@ -74,92 +118,88 @@ impl DevContainer {
             .and_then(|output| serde_json::from_str(&output).into_diagnostic())
     }
 
-    pub fn spawn<S: AsRef<str>>(&self, command: &[S]) -> Result<Child> {
-        let workspace_folder = self.workspace_folder.to_string_lossy();
-        let mut args = vec![
-            "devcontainer",
-            "exec",
-            "--workspace-folder",
-            &*workspace_folder,
-        ];
-        args.extend(command.iter().map(|s| s.as_ref()));
+    pub fn spawn<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<Child> {
+        let mut args = self.make_devcontainer_cli_args(root_mode);
+        args.extend(command.iter().map(|s| s.as_ref().to_owned()));
 
         exec::spawn(&args)
     }
 
-    pub fn exec<S: AsRef<str>>(&self, command: &[S]) -> Result<()> {
-        let workspace_folder = self.workspace_folder.to_string_lossy();
-        let mut args = vec![
-            "devcontainer",
-            "exec",
-            "--workspace-folder",
-            &*workspace_folder,
-        ];
-        args.extend(command.iter().map(|s| s.as_ref()));
+    pub fn exec<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<()> {
+        let mut args = self.make_devcontainer_cli_args(root_mode);
+        args.extend(command.iter().map(|s| s.as_ref().to_owned()));
 
         exec::exec(&args)
     }
 
-    pub fn exec_capturing_stdout<S: AsRef<str>>(&self, command: &[S]) -> Result<String> {
-        let workspace_folder = self.workspace_folder.to_string_lossy();
-        let mut args = vec![
-            "devcontainer",
-            "exec",
-            "--workspace-folder",
-            &*workspace_folder,
-        ];
-        args.extend(command.iter().map(|s| s.as_ref()));
+    pub fn exec_capturing_stdout<S: AsRef<str>>(
+        &self,
+        command: &[S],
+        root_mode: RootMode,
+    ) -> Result<String> {
+        let mut args = self.make_devcontainer_cli_args(root_mode);
+        args.extend(command.iter().map(|s| s.as_ref().to_owned()));
 
         exec::capturing_stdout(&args)
     }
 
-    pub fn exec_with_stdin<S: AsRef<str>>(&self, command: &[S], stdin: Stdio) -> Result<()> {
-        let workspace_folder = self.workspace_folder.to_string_lossy();
-        let mut args = vec![
-            "devcontainer",
-            "exec",
-            "--workspace-folder",
-            &*workspace_folder,
-        ];
-        args.extend(command.iter().map(|s| s.as_ref()));
+    pub fn exec_with_stdin<S: AsRef<str>>(
+        &self,
+        command: &[S],
+        stdin: Stdio,
+        root_mode: RootMode,
+    ) -> Result<()> {
+        let mut args = self.make_devcontainer_cli_args(root_mode);
+        args.extend(command.iter().map(|s| s.as_ref().to_owned()));
 
         exec::with_stdin(&args, stdin)
     }
 
-    pub fn exec_with_bytes_stdin<S: AsRef<str>>(&self, command: &[S], stdin: &[u8]) -> Result<()> {
-        let workspace_folder = self.workspace_folder.to_string_lossy();
-        let mut args = vec![
-            "devcontainer",
-            "exec",
-            "--workspace-folder",
-            &*workspace_folder,
-        ];
-        args.extend(command.iter().map(|s| s.as_ref()));
+    pub fn exec_with_bytes_stdin<S: AsRef<str>>(
+        &self,
+        command: &[S],
+        stdin: &[u8],
+        root_mode: RootMode,
+    ) -> Result<()> {
+        let mut args = self.make_devcontainer_cli_args(root_mode);
+        args.extend(command.iter().map(|s| s.as_ref().to_owned()));
 
         exec::with_bytes_stdin(&args, stdin)
     }
 
-    pub fn copy_file_host_to_container(&self, src_host: &Path, dst_container: &str) -> Result<()> {
+    pub fn copy_file_host_to_container(
+        &self,
+        src_host: &Path,
+        dst_container: &str,
+        root_mode: RootMode,
+    ) -> Result<()> {
         let src_host_file = File::open(src_host)
             .into_diagnostic()
             .wrap_err_with(|| miette!("failed to open {}", src_host.display()))?;
 
-        self.exec(&["sh", "-c", &format!("mkdir -p $(dirname {dst_container})")])
-            .wrap_err_with(|| {
-                miette!(
-                    "failed to create parent directory of `{}` on container",
-                    dst_container,
-                )
-            })?;
+        self.exec(
+            &["sh", "-c", &format!("mkdir -p $(dirname {dst_container})")],
+            root_mode,
+        )
+        .wrap_err_with(|| {
+            miette!(
+                "failed to create parent directory of `{}` on container",
+                dst_container,
+            )
+        })?;
 
         let cat_cmd = format!("cat > {}", dst_container);
-        self.exec_with_stdin(&["sh", "-c", &cat_cmd], Stdio::from(src_host_file))
-            .wrap_err_with(|| {
-                miette!(
-                    "failed to write file contents to `{}` on container",
-                    dst_container
-                )
-            })
+        self.exec_with_stdin(
+            &["sh", "-c", &cat_cmd],
+            Stdio::from(src_host_file),
+            root_mode,
+        )
+        .wrap_err_with(|| {
+            miette!(
+                "failed to write file contents to `{}` on container",
+                dst_container
+            )
+        })
     }
 
     pub fn forward_port(&self, host_port: &str, container_port: &str) -> Result<PortForwardGuard> {
@@ -254,6 +294,23 @@ impl DevContainer {
             "dockim-{}-socat-{}",
             up_output.container_id, host_port
         ))
+    }
+
+    fn make_devcontainer_cli_args(&self, root_mode: RootMode) -> Vec<String> {
+        let workspace_folder = self.workspace_folder.to_string_lossy().to_string();
+        let mut args = vec![
+            "devcontainer".to_owned(),
+            "exec".to_owned(),
+            "--workspace-folder".to_owned(),
+            workspace_folder,
+        ];
+
+        if root_mode.is_required() {
+            args.push("--override-config".to_owned());
+            args.push(self.override_config_for_root.to_string_lossy().to_string());
+        }
+
+        args
     }
 }
 

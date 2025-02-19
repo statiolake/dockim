@@ -41,10 +41,7 @@ pub fn exec<S: AsRef<str> + Debug>(args: &[S]) -> Result<()> {
         .status()
         .into_diagnostic()
         .wrap_err("exec failed")?;
-    ensure!(
-        status.success(),
-        "devcontainer CLI returned non-successful status"
-    );
+    ensure!(status.success(), "Command returned non-successful status",);
 
     Ok(())
 }
@@ -63,10 +60,7 @@ pub fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()>
         .status()
         .into_diagnostic()
         .wrap_err("exec failed")?;
-    ensure!(
-        status.success(),
-        "devcontainer CLI returned non-successful status"
-    );
+    ensure!(status.success(), "Command returned non-successful status");
 
     Ok(())
 }
@@ -95,10 +89,7 @@ pub fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -> Resu
         .wait()
         .into_diagnostic()
         .wrap_err("failed to wait child process to finish")?;
-    ensure!(
-        status.success(),
-        "devcontainer CLI returned non-successful status"
-    );
+    ensure!(status.success(), "Command returned non-successful status");
 
     Ok(())
 }
@@ -118,7 +109,7 @@ pub fn capturing_stdout<S: AsRef<str> + Debug>(args: &[S]) -> Result<String> {
         .wrap_err("exec failed")?;
     ensure!(
         out.status.success(),
-        "devcontainer CLI returned non-successful status"
+        "Command returned non-successful status"
     );
 
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();

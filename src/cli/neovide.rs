@@ -6,17 +6,19 @@ use scopeguard::defer;
 use crate::{
     cli::{Args, NeovideArgs},
     config::Config,
-    devcontainer::DevContainer,
+    devcontainer::{DevContainer, RootMode},
     exec, log,
 };
 
 pub fn main(_config: &Config, args: &Args, neovide_args: &NeovideArgs) -> Result<()> {
-    let dc = DevContainer::new(args.workspace_folder.clone());
+    let dc = DevContainer::new(args.workspace_folder.clone())
+        .wrap_err("failed to initialize devcontainer client")?;
 
-    dc.exec(&["nvim", "--version"]).wrap_err(miette!(
-        help = "try `dockim build --rebuild` first",
-        "Neovim not found"
-    ))?;
+    dc.exec(&["nvim", "--version"], RootMode::No)
+        .wrap_err(miette!(
+            help = "try `dockim build --rebuild` first",
+            "Neovim not found"
+        ))?;
 
     let listen = format!("0.0.0.0:{}", neovide_args.container_port);
 
@@ -27,12 +29,15 @@ pub fn main(_config: &Config, args: &Args, neovide_args: &NeovideArgs) -> Result
         let _ = exec::exec(&["stty", "sane"]);
     }
 
-    let mut nvim = dc.spawn(&[
-        "nvim".to_string(),
-        "--headless".to_string(),
-        "--listen".to_string(),
-        listen,
-    ])?;
+    let mut nvim = dc.spawn(
+        &[
+            "nvim".to_string(),
+            "--headless".to_string(),
+            "--listen".to_string(),
+            listen,
+        ],
+        RootMode::No,
+    )?;
 
     // Wait for everything to start up
     log!("Waiting": "5 seconds");

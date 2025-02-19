@@ -1,17 +1,18 @@
 use std::process::{Command, Stdio};
 
-use miette::Result;
+use miette::{Context, Result};
 use scopeguard::defer;
 
 use crate::{
     cli::{Args, NeovimArgs},
     config::Config,
-    devcontainer::DevContainer,
+    devcontainer::{DevContainer, RootMode},
     log,
 };
 
 pub fn main(_config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
-    let dc = DevContainer::new(args.workspace_folder.clone());
+    let dc = DevContainer::new(args.workspace_folder.clone())
+        .wrap_err("failed to initialize devcontainer client")?;
 
     // Run csrv for clipboard support if exists
     let csrv = Command::new("csrv")
@@ -43,5 +44,5 @@ pub fn main(_config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<(
         "nvim",
     ];
     args.extend(neovim_args.args.iter().map(|s| s.as_str()));
-    dc.exec(&args)
+    dc.exec(&args, RootMode::No)
 }

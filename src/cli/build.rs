@@ -5,41 +5,37 @@ use miette::{miette, Result, WrapErr};
 use crate::{
     cli::{Args, BuildArgs},
     config::Config,
-    devcontainer::{DevContainer, UpOutput},
+    devcontainer::{DevContainer, RootMode, UpOutput},
     exec,
 };
 
 pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> {
-    let dc = DevContainer::new(args.workspace_folder.clone());
+    let dc = DevContainer::new(args.workspace_folder.clone())
+        .wrap_err("failed to initialize devcontainer client")?;
 
     let up_cont = devcontainer_up(&dc, build_args.rebuild, build_args.no_cache)?;
 
-    let needs_sudo = up_cont.remote_user != "root";
-
-    enable_host_docker_internal_in_rancher_desktop_on_lima(&dc, needs_sudo)?;
-    install_prerequisites(&dc, needs_sudo)?;
-    install_neovim(config, &dc, needs_sudo)?;
+    enable_host_docker_internal_in_rancher_desktop_on_lima(&dc)?;
+    install_prerequisites(&dc)?;
+    install_neovim(config, &dc)?;
     install_github_cli(&dc)?;
     login_to_gh(&dc)?;
     copy_copilot(&dc)?;
 
-    prepare_opt_dir(&dc, needs_sudo, &up_cont.remote_user)?;
+    prepare_opt_dir(&dc, &up_cont.remote_user)?;
     install_dotfiles(config, &dc)?;
 
     Ok(())
 }
 
-fn enable_host_docker_internal_in_rancher_desktop_on_lima(
-    dc: &DevContainer,
-    needs_sudo: bool,
-) -> Result<()> {
+fn enable_host_docker_internal_in_rancher_desktop_on_lima(dc: &DevContainer) -> Result<()> {
     if exec::exec(&["rdctl", "version"]).is_err() {
         // Not using Rancher Desktop, skipping
         return Ok(());
     }
 
     let container_hosts = dc
-        .exec_capturing_stdout(&["cat", "/etc/hosts"])
+        .exec_capturing_stdout(&["cat", "/etc/hosts"], RootMode::No)
         .wrap_err("failed to read /etc/hosts")?;
 
     if container_hosts.contains("host.docker.internal") {
@@ -65,16 +61,17 @@ fn enable_host_docker_internal_in_rancher_desktop_on_lima(
         ip_addr
     };
 
-    let sudo = if needs_sudo { "sudo" } else { "" };
-
-    dc.exec(&[
-        "sh",
-        "-c",
-        &format!(
-            "echo '{host_ip_addr} host.docker.internal' | {sudo} tee -a /etc/hosts",
-            host_ip_addr = host_ip_addr
-        ),
-    ])?;
+    dc.exec(
+        &[
+            "sh",
+            "-c",
+            &format!(
+                "echo '{host_ip_addr} host.docker.internal' | tee -a /etc/hosts",
+                host_ip_addr = host_ip_addr
+            ),
+        ],
+        RootMode::Yes,
+    )?;
 
     Ok(())
 }
@@ -85,18 +82,7 @@ fn devcontainer_up(dc: &DevContainer, rebuild: bool, no_cache: bool) -> Result<U
     dc.up_and_inspect()
 }
 
-fn install_prerequisites(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
-    macro_rules! sudo {
-        ($($arg:expr),*$(,)?) => {{
-            let mut sudo = if needs_sudo { vec!["sudo".to_string()] } else { vec![] };
-            $(
-                sudo.push($arg.to_string());
-            )*
-
-            sudo
-        }};
-    }
-
+fn install_prerequisites(dc: &DevContainer) -> Result<()> {
     let prerequisites = &[
         "zsh",
         "curl",
@@ -124,64 +110,59 @@ fn install_prerequisites(dc: &DevContainer, needs_sudo: bool) -> Result<()> {
     ];
 
     // Sometimes apt-get update fails without 777 permissions on /tmp
-    dc.exec(&sudo!["mkdir", "-p", "/tmp"])?;
-    dc.exec(&sudo!["chmod", "777", "/tmp"])?;
-    dc.exec(&sudo!["apt-get", "update"])?;
+    dc.exec(&["mkdir", "-p", "/tmp"], RootMode::Yes)?;
+    dc.exec(&["chmod", "777", "/tmp"], RootMode::Yes)?;
+    dc.exec(&["apt-get", "update"], RootMode::Yes)?;
     dc.exec(
-        &chain![
-            sudo!["apt-get", "-y", "install"],
-            prerequisites.iter().map(|s| s.to_string())
-        ]
-        .collect_vec(),
+        &chain!(&["apt-get", "-y", "install"], prerequisites).collect_vec(),
+        RootMode::Yes,
     )?;
 
     Ok(())
 }
 
-fn install_neovim(config: &Config, dc: &DevContainer, needs_sudo: bool) -> Result<()> {
+fn install_neovim(config: &Config, dc: &DevContainer) -> Result<()> {
     if dc
-        .exec_capturing_stdout(&["/usr/local/bin/nvim", "--version"])
+        .exec_capturing_stdout(&["/usr/local/bin/nvim", "--version"], RootMode::No)
         .is_ok()
     {
         return Ok(());
     }
 
-    let sudo = |cmd: &str| {
-        if needs_sudo {
-            "sudo ".to_string() + cmd
-        } else {
-            cmd.to_string()
-        }
-    };
+    let _ = dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No);
+    dc.exec(&["mkdir", "-p", "/tmp/neovim"], RootMode::No)?;
 
-    let _ = dc.exec(&["rm", "-rf", "/tmp/neovim"]);
-    dc.exec(&["mkdir", "-p", "/tmp/neovim"])?;
+    dc.exec(
+        &[
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--no-single-branch",
+            "https://github.com/neovim/neovim",
+            "/tmp/neovim",
+        ],
+        RootMode::No,
+    )?;
 
-    dc.exec(&[
-        "git",
-        "clone",
-        "--depth",
-        "1",
-        "--no-single-branch",
-        "https://github.com/neovim/neovim",
-        "/tmp/neovim",
-    ])?;
+    let neovim_version = &config.neovim_version;
+    let make_cmd = format!("cd /tmp/neovim && (git checkout {neovim_version} || true) && make -j4");
 
-    let cmds = [
-        "cd /tmp/neovim".to_string(),
-        format!("(git checkout {} || true)", config.neovim_version),
-        "make -j4".to_string(),
-        sudo("make install"),
-    ];
-
-    dc.exec(&["sh", "-c", &cmds.join(" && ")])?;
-    dc.exec(&["rm", "-rf", "/tmp/neovim"])?;
+    dc.exec(&["sh", "-c", &make_cmd], RootMode::No)?;
+    dc.exec(
+        &["sh", "-c", "cd /tmp/neovim && make install"],
+        RootMode::Yes,
+    )?;
+    dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No)?;
 
     Ok(())
 }
 
 fn install_github_cli(dc: &DevContainer) -> Result<()> {
-    dc.exec(&["sh", "-c", "curl -sS https://webi.sh/gh | sh"])
+    dc.exec(
+        &["sh", "-c", "curl -sS https://webi.sh/gh | sh"],
+        RootMode::No,
+    )
 }
 
 fn login_to_gh(dc: &DevContainer) -> Result<()> {
@@ -189,17 +170,21 @@ fn login_to_gh(dc: &DevContainer) -> Result<()> {
     dc.exec_with_bytes_stdin(
         &["sh", "-c", "~/.local/bin/gh auth login --with-token"],
         token.trim().as_bytes(),
+        RootMode::No,
     )?;
 
     Ok(())
 }
 
 fn copy_copilot(dc: &DevContainer) -> Result<()> {
-    dc.exec(&["sh", "-c", "mkdir -p ~/.config/github-copilot"])?;
+    dc.exec(
+        &["sh", "-c", "mkdir -p ~/.config/github-copilot"],
+        RootMode::No,
+    )?;
 
     let local_home = home_dir().ok_or_else(|| miette!("failed to get local home directory"))?;
     let remote_home = dc
-        .exec_capturing_stdout(&["sh", "-c", "readlink -f $(echo $HOME)"])
+        .exec_capturing_stdout(&["sh", "-c", "readlink -f $(echo $HOME)"], RootMode::No)
         .wrap_err("failed to get remote home directory")?
         .trim()
         .to_string();
@@ -211,47 +196,40 @@ fn copy_copilot(dc: &DevContainer) -> Result<()> {
         }
 
         let remote_path = format!("{remote_home}/.config/github-copilot/{file}");
-        dc.copy_file_host_to_container(&local_path, &remote_path)?;
+        dc.copy_file_host_to_container(&local_path, &remote_path, RootMode::No)?;
     }
 
     Ok(())
 }
 
-fn prepare_opt_dir(dc: &DevContainer, needs_sudo: bool, owner_user: &str) -> Result<()> {
-    macro_rules! sudo {
-        ($($arg:expr),*$(,)?) => {{
-            let mut sudo = if needs_sudo { vec!["sudo".to_string()] } else { vec![] };
-            $(
-                sudo.push($arg.to_string());
-            )*
-
-            sudo
-        }};
-    }
-
-    dc.exec(&sudo!["mkdir", "-p", "/opt"])?;
-    dc.exec(&sudo![
-        "chown",
-        "-R",
-        format!("{owner_user}:{owner_user}"),
-        "/opt"
-    ])?;
+fn prepare_opt_dir(dc: &DevContainer, owner_user: &str) -> Result<()> {
+    dc.exec(&["mkdir", "-p", "/opt"], RootMode::Yes)?;
+    dc.exec(
+        &["chown", "-R", &format!("{owner_user}:{owner_user}"), "/opt"],
+        RootMode::Yes,
+    )?;
 
     Ok(())
 }
 
 fn install_dotfiles(config: &Config, dc: &DevContainer) -> Result<()> {
-    let _ = dc.exec(&["rm", "-rf", "/opt/dotfiles"]);
-    dc.exec(&[
-        "sh",
-        "-c",
-        "~/.local/bin/gh repo clone dotfiles /opt/dotfiles",
-    ])?;
-    dc.exec(&[
-        "sh",
-        "-c",
-        &format!("cd /opt/dotfiles; {}", config.dotfiles_install_command),
-    ])?;
+    let _ = dc.exec(&["rm", "-rf", "/opt/dotfiles"], RootMode::No);
+    dc.exec(
+        &[
+            "sh",
+            "-c",
+            "~/.local/bin/gh repo clone dotfiles /opt/dotfiles",
+        ],
+        RootMode::No,
+    )?;
+    dc.exec(
+        &[
+            "sh",
+            "-c",
+            &format!("cd /opt/dotfiles; {}", config.dotfiles_install_command),
+        ],
+        RootMode::No,
+    )?;
 
     Ok(())
 }
