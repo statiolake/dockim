@@ -16,7 +16,7 @@ pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> 
 
     let needs_sudo = up_cont.remote_user != "root";
 
-    enable_host_docker_internal_in_rancher_desktop_on_lima(&dc)?;
+    enable_host_docker_internal_in_rancher_desktop_on_lima(&dc, needs_sudo)?;
     install_prerequisites(&dc, needs_sudo)?;
     install_neovim(config, &dc, needs_sudo)?;
     install_github_cli(&dc)?;
@@ -29,17 +29,12 @@ pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> 
     Ok(())
 }
 
-fn enable_host_docker_internal_in_rancher_desktop_on_lima(dc: &DevContainer) -> Result<()> {
+fn enable_host_docker_internal_in_rancher_desktop_on_lima(
+    dc: &DevContainer,
+    needs_sudo: bool,
+) -> Result<()> {
     if exec::exec(&["rdctl", "version"]).is_err() {
         // Not using Rancher Desktop, skipping
-        return Ok(());
-    }
-
-    if dc
-        .exec_capturing_stdout(&["whoami"])
-        .map_or(false, |user| user.trim() != "root")
-    {
-        // Skip if not running as root
         return Ok(());
     }
 
@@ -70,11 +65,13 @@ fn enable_host_docker_internal_in_rancher_desktop_on_lima(dc: &DevContainer) -> 
         ip_addr
     };
 
+    let sudo = if needs_sudo { "sudo" } else { "" };
+
     dc.exec(&[
         "sh",
         "-c",
         &format!(
-            "echo '{host_ip_addr} host.docker.internal' | tee -a /etc/hosts",
+            "echo '{host_ip_addr} host.docker.internal' | {sudo} tee -a /etc/hosts",
             host_ip_addr = host_ip_addr
         ),
     ])?;
