@@ -95,15 +95,6 @@ fn install_prerequisites(dc: &DevContainer) -> Result<()> {
         "python3-pip",
         "python3-pynvim",
         "tzdata",
-        "ninja-build",
-        "gettext",
-        "libtool",
-        "libtool-bin",
-        "autoconf",
-        "automake",
-        "cmake",
-        "g++",
-        "pkg-config",
         "zip",
         "unzip",
         "git-secrets",
@@ -129,31 +120,45 @@ fn install_neovim(config: &Config, dc: &DevContainer) -> Result<()> {
         return Ok(());
     }
 
-    let _ = dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No);
-    dc.exec(&["mkdir", "-p", "/tmp/neovim"], RootMode::No)?;
+    let arch = dc
+        .exec_capturing_stdout(&["uname", "-m"], RootMode::No)
+        .wrap_err("failed to determine system architecture")?
+        .trim()
+        .to_string();
+    let arch = match arch.as_str() {
+        "x86_64" => "x86_64",
+        "aarch64" | "arm64" => "arm64",
+        _ => return Err(miette!("Unsupported architecture: {}", arch)),
+    };
+
+    let download_url = format!(
+        "https://github.com/neovim/neovim/releases/download/{}/nvim-linux-{}.tar.gz",
+        config.neovim_version, arch
+    );
+
+    // Ignore error here to avoid failing if the file doesn't exist
+    let _ = dc.exec(&["rm", "-f", "/tmp/nvim.tar.gz"], RootMode::No);
 
     dc.exec(
-        &[
-            "git",
-            "clone",
-            "--depth",
-            "1",
-            "--no-single-branch",
-            "https://github.com/neovim/neovim",
-            "/tmp/neovim",
-        ],
+        &["curl", "-L", "-o", "/tmp/nvim.tar.gz", &download_url],
         RootMode::No,
     )?;
 
-    let neovim_version = &config.neovim_version;
-    let make_cmd = format!("cd /tmp/neovim && (git checkout {neovim_version} || true) && make -j4");
-
-    dc.exec(&["sh", "-c", &make_cmd], RootMode::No)?;
+    // Since all files in the archive are in nvim-linux-x86_64/ directory, we
+    // need to strip the first path component.
     dc.exec(
-        &["sh", "-c", "cd /tmp/neovim && make install"],
+        &[
+            "tar",
+            "--strip-components=1",
+            "-C",
+            "/usr/local",
+            "-xzf",
+            "/tmp/nvim.tar.gz",
+        ],
         RootMode::Yes,
     )?;
-    dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No)?;
+
+    dc.exec(&["rm", "-f", "/tmp/nvim.tar.gz"], RootMode::No)?;
 
     Ok(())
 }
