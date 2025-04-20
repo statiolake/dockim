@@ -34,7 +34,7 @@ fn default_shell() -> String {
 }
 
 fn default_neovim_version() -> String {
-    "v0.10.0".to_string()
+    "v0.11.0".to_string()
 }
 
 fn default_dotfiles_repository_name() -> String {
