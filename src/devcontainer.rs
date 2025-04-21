@@ -118,6 +118,32 @@ impl DevContainer {
             .and_then(|output| serde_json::from_str(&output).into_diagnostic())
     }
 
+    pub fn stop(&self) -> Result<()> {
+        let up_output = self.up_and_inspect()?;
+        let container_id = &up_output.container_id;
+
+        let labels = exec::capturing_stdout(&[
+            "docker",
+            "inspect",
+            "--format",
+            "{{json .Config.Labels}}",
+            container_id,
+        ])?;
+
+        let labels: HashMap<String, String> = serde_json::from_str(&labels)
+            .into_diagnostic()
+            .wrap_err("failed to parse container labels")?;
+
+        if let Some(project) = labels.get("com.docker.compose.project") {
+            exec::exec(&["docker", "compose", "-p", project, "stop"])
+                .wrap_err("failed to stop docker compose stack")?;
+        } else {
+            exec::exec(&["docker", "stop", container_id]).wrap_err("failed to stop container")?;
+        }
+
+        Ok(())
+    }
+
     pub fn spawn<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<Child> {
         let mut args = self.make_devcontainer_cli_args(root_mode);
         args.extend(command.iter().map(|s| s.as_ref().to_owned()));
