@@ -1,7 +1,8 @@
 use clap::Parser;
 use dockim::{
     cli::{
-        bash, build, exec as cli_exec, neovide, neovim, port, shell, stop, up, Args, Subcommand,
+        bash, build, down, exec as cli_exec, neovide, neovim, port, shell, stop, up, Args,
+        Subcommand,
     },
     config::Config,
     devcontainer::DevContainer,
@@ -24,7 +25,8 @@ fn main() -> Result<()> {
         Subcommand::Bash(bash_args) => bash::main(&config, &args, bash_args),
         Subcommand::Exec(exec_args) => cli_exec::main(&config, &args, exec_args),
         Subcommand::Port(port_args) => port::main(&config, &args, port_args),
-        Subcommand::Stop(up_args) => stop::main(&config, &args, up_args),
+        Subcommand::Stop(stop_args) => stop::main(&config, &args, stop_args),
+        Subcommand::Down(down_args) => down::main(&config, &args, down_args),
     }
 }
 

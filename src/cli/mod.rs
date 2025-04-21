@@ -4,6 +4,7 @@ use crate::config::Config;
 
 pub mod bash;
 pub mod build;
+pub mod down;
 pub mod exec;
 pub mod neovide;
 pub mod neovim;
@@ -28,6 +29,8 @@ pub enum Subcommand {
     Build(BuildArgs),
 
     Stop(StopArgs),
+
+    Down(DownArgs),
 
     #[clap(alias = "v")]
     Neovim(NeovimArgs),
@@ -91,6 +94,9 @@ pub struct ShellArgs {
 pub struct BashArgs {
     pub args: Vec<String>,
 }
+
+#[derive(Debug, clap::Parser)]
+pub struct DownArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct ExecArgs {

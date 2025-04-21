@@ -118,29 +118,48 @@ impl DevContainer {
             .and_then(|output| serde_json::from_str(&output).into_diagnostic())
     }
 
-    pub fn stop(&self) -> Result<()> {
+    fn get_compose_project(&self) -> Result<(String, Option<String>)> {
         let up_output = self.up_and_inspect()?;
-        let container_id = &up_output.container_id;
+        let container_id = up_output.container_id;
 
         let labels = exec::capturing_stdout(&[
             "docker",
             "inspect",
             "--format",
             "{{json .Config.Labels}}",
-            container_id,
+            &container_id,
         ])?;
 
         let labels: HashMap<String, String> = serde_json::from_str(&labels)
             .into_diagnostic()
             .wrap_err("failed to parse container labels")?;
 
-        if let Some(project) = labels.get("com.docker.compose.project") {
-            exec::exec(&["docker", "compose", "-p", project, "stop"])
+        Ok((
+            container_id,
+            labels.get("com.docker.compose.project").cloned(),
+        ))
+    }
+
+    pub fn stop(&self) -> Result<()> {
+        let (container_id, compose_project) = self.get_compose_project()?;
+        if let Some(project) = compose_project {
+            exec::exec(&["docker", "compose", "-p", &project, "stop"])
                 .wrap_err("failed to stop docker compose stack")?;
         } else {
-            exec::exec(&["docker", "stop", container_id]).wrap_err("failed to stop container")?;
+            exec::exec(&["docker", "stop", &container_id]).wrap_err("failed to stop container")?;
         }
+        Ok(())
+    }
 
+    pub fn down(&self) -> Result<()> {
+        let (container_id, compose_project) = self.get_compose_project()?;
+        if let Some(project) = compose_project {
+            exec::exec(&["docker", "compose", "-p", &project, "down"])
+                .wrap_err("failed to stop docker compose stack")?;
+        } else {
+            exec::exec(&["docker", "stop", &container_id]).wrap_err("failed to stop container")?;
+            exec::exec(&["docker", "rm", &container_id]).wrap_err("failed to remove container")?;
+        }
         Ok(())
     }
 
