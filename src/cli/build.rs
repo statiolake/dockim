@@ -93,10 +93,7 @@ fn install_prerequisites(dc: &DevContainer) -> Result<()> {
         "xclip",
         "python3",
         "python3-pip",
-        "python3-pynvim",
         "tzdata",
-        "zip",
-        "unzip",
         "git-secrets",
     ];
 
