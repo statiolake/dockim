@@ -16,6 +16,7 @@ pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> 
     let up_cont = devcontainer_up(&dc, build_args.rebuild, build_args.no_cache)?;
 
     enable_host_docker_internal_in_rancher_desktop_on_lima(&dc)?;
+    enable_host_docker_internal_in_linux_dockerd(&dc)?;
     install_prerequisites(&dc)?;
     install_neovim(config, &dc)?;
     install_github_cli(&dc)?;
@@ -60,6 +61,44 @@ fn enable_host_docker_internal_in_rancher_desktop_on_lima(dc: &DevContainer) -> 
 
         ip_addr
     };
+
+    dc.exec(
+        &[
+            "sh",
+            "-c",
+            &format!(
+                "echo '{host_ip_addr} host.docker.internal' | tee -a /etc/hosts",
+                host_ip_addr = host_ip_addr
+            ),
+        ],
+        RootMode::Yes,
+    )?;
+
+    Ok(())
+}
+
+fn enable_host_docker_internal_in_linux_dockerd(dc: &DevContainer) -> Result<()> {
+    // Check if we're running on Linux
+    if !cfg!(target_os = "linux") {
+        return Ok(());
+    }
+
+    let container_hosts = dc
+        .exec_capturing_stdout(&["cat", "/etc/hosts"], RootMode::No)
+        .wrap_err("failed to read /etc/hosts")?;
+
+    if container_hosts.contains("host.docker.internal") {
+        // host.docker.internal already exists in /etc/hosts, skipping
+        return Ok(());
+    }
+
+    let host_ip_addr = dc
+        .exec_capturing_stdout(
+            &["sh", "-c", "ip route | grep default | cut -d' ' -f3"],
+            RootMode::No,
+        )
+        .map(|ip| ip.trim().to_string())
+        .unwrap_or_else(|_| "172.17.0.1".to_string()); // デフォルト値にフォールバック
 
     dc.exec(
         &[

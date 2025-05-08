@@ -29,7 +29,7 @@ pub struct UpOutput {
 #[derive(Debug)]
 pub struct DevContainer {
     workspace_folder: PathBuf,
-    override_config_for_root: TempPath,
+    overriden_config_paths: OverridenConfigPaths,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -50,38 +50,15 @@ impl DevContainer {
     }
 
     pub fn new(workspace_folder: Option<PathBuf>) -> Result<Self> {
-        let mut override_config_for_root =
-            NamedTempFile::new().expect("failed to create temp file for overriding remote user");
-
-        let mut config: Value = serde_hjson::from_str(
-            &fs::read_to_string(
-                workspace_folder
-                    .as_deref()
-                    .unwrap_or_else(|| Path::new("."))
-                    .join(".devcontainer")
-                    .join("devcontainer.json"),
-            )
-            .into_diagnostic()
-            .wrap_err("failed to read devcontainer.json")?,
-        )
-        .into_diagnostic()
-        .wrap_err("failed to parse devcontainer.json")?;
-
-        config["remoteUser"] = "root".into();
-
-        override_config_for_root
-            .write_all(
-                serde_json::to_string(&config)
-                    .into_diagnostic()
-                    .wrap_err("failed to format config")?
-                    .as_bytes(),
-            )
-            .into_diagnostic()
-            .wrap_err("failed to write to override config")?;
+        let overriden_config = generate_overriden_config_paths(
+            workspace_folder
+                .as_deref()
+                .unwrap_or_else(|| Path::new(".")),
+        )?;
 
         Ok(DevContainer {
             workspace_folder: workspace_folder.unwrap_or_else(|| PathBuf::from(".")),
-            override_config_for_root: override_config_for_root.into_temp_path(),
+            overriden_config_paths: overriden_config,
         })
     }
 
@@ -352,11 +329,249 @@ impl DevContainer {
 
         if root_mode.is_required() {
             args.push("--override-config".to_owned());
-            args.push(self.override_config_for_root.to_string_lossy().to_string());
+            args.push(
+                self.overriden_config_paths
+                    .root_devcontainer_json
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        } else {
+            args.push("--override-config".to_owned());
+            args.push(
+                self.overriden_config_paths
+                    .devcontainer_json
+                    .to_string_lossy()
+                    .to_string(),
+            );
         }
 
         args
     }
+}
+
+#[derive(Debug)]
+struct OverridenConfigPaths {
+    devcontainer_json: TempPath,
+    root_devcontainer_json: TempPath,
+    // We need to store the instance of overriden compose.yaml during the lifetime of
+    // devcontaier.json. If we don't, the file will be deleted as in RAII mechanism while still
+    // referenced by devcontainer.json.
+    _compose_yaml: Option<TempPath>,
+}
+
+/// Generate override config file contents to achieve various useful features:
+/// - Root user execution in container without sudo installation
+/// - host.docker.internal on Linux
+fn generate_overriden_config_paths(workspace_folder: &Path) -> Result<OverridenConfigPaths> {
+    // devcontainer.json
+    let compose_yaml = generate_overriden_compose_yaml(workspace_folder)
+        .wrap_err("failed to generate temporary docker-compose overrides")?
+        .map(|f| f.into_temp_path());
+    let devcontainer_json =
+        generate_overriden_devcontainer_json(workspace_folder, compose_yaml.as_ref())
+            .wrap_err("failed to generate temporary devcontainer overrides")?
+            .into_temp_path();
+    let root_devcontainer_json =
+        generate_overriden_root_devcontainer_json(workspace_folder, compose_yaml.as_ref())
+            .wrap_err("failed to generate temporary devcontainer overrides")?
+            .into_temp_path();
+
+    Ok(OverridenConfigPaths {
+        devcontainer_json,
+        root_devcontainer_json,
+        _compose_yaml: compose_yaml,
+    })
+}
+
+fn load_devcontainer_json(workspace_folder: &Path) -> Result<Value> {
+    let path = workspace_folder
+        .join(".devcontainer")
+        .join("devcontainer.json");
+    let value: Value = serde_hjson::from_str(
+        &fs::read_to_string(&path)
+            .into_diagnostic()
+            .wrap_err("failed to read devcontainer.json")?,
+    )
+    .into_diagnostic()
+    .wrap_err("failed to parse devcontainer.json")?;
+
+    Ok(value)
+}
+
+fn update_host_docker_internal_devcontainer_json_value(value: &mut Value) {
+    // Add host.docker.internal to runArgs
+    let mut run_args = value["runArgs"].as_array().cloned().unwrap_or_default();
+    run_args.push(Value::String("--add-host".into()));
+    run_args.push(Value::String("host.docker.internal:host-gateway".into()));
+    value["runArgs"] = Value::Array(run_args);
+}
+
+fn update_root_devcontainer_json_value(value: &mut Value) {
+    // Override remoteUser to root
+    value["remoteUser"] = "root".into();
+}
+
+fn update_compose_files(value: &mut Value, compose_yaml: Option<&TempPath>) {
+    let Some(compose_yaml) = compose_yaml else {
+        return;
+    };
+
+    let mut compose_files = value["dockerComposeFile"]
+        .as_array()
+        .cloned()
+        .or_else(|| {
+            value["dockerComposeFile"]
+                .as_str()
+                .map(|s| vec![Value::String(s.into())])
+        })
+        .unwrap_or_default();
+    compose_files.push(Value::String(compose_yaml.to_string_lossy().to_string()));
+    value["dockerComposeFile"] = Value::Array(compose_files);
+}
+
+fn generate_overriden_devcontainer_json(
+    workspace_folder: &Path,
+    compose_yaml: Option<&TempPath>,
+) -> Result<NamedTempFile> {
+    let mut value =
+        load_devcontainer_json(workspace_folder).wrap_err("failed to load devcontainer.json")?;
+
+    update_host_docker_internal_devcontainer_json_value(&mut value);
+    update_compose_files(&mut value, compose_yaml);
+
+    let mut overriden_file =
+        NamedTempFile::new().expect("failed to create temp file for overriding remote user");
+
+    overriden_file
+        .write_all(
+            serde_json::to_string(&value)
+                .into_diagnostic()
+                .wrap_err("failed to format config")?
+                .as_bytes(),
+        )
+        .into_diagnostic()
+        .wrap_err("failed to write to override config")?;
+
+    Ok(overriden_file)
+}
+
+fn generate_overriden_root_devcontainer_json(
+    workspace_folder: &Path,
+    compose_yaml: Option<&TempPath>,
+) -> Result<NamedTempFile> {
+    let mut value =
+        load_devcontainer_json(workspace_folder).wrap_err("failed to load devcontainer.json")?;
+
+    update_host_docker_internal_devcontainer_json_value(&mut value);
+    update_root_devcontainer_json_value(&mut value);
+    update_compose_files(&mut value, compose_yaml);
+
+    let mut overriden_file =
+        NamedTempFile::new().expect("failed to create temp file for overriding remote user");
+
+    overriden_file
+        .write_all(
+            serde_json::to_string(&value)
+                .into_diagnostic()
+                .wrap_err("failed to format config")?
+                .as_bytes(),
+        )
+        .into_diagnostic()
+        .wrap_err("failed to write to override config")?;
+
+    Ok(overriden_file)
+}
+
+fn generate_overriden_compose_yaml(workspace_folder: &Path) -> Result<Option<NamedTempFile>> {
+    let devcontainer_json_value =
+        load_devcontainer_json(workspace_folder).wrap_err("failed to load devcontainer.json")?;
+
+    let Some(docker_compose_paths) = devcontainer_json_value["dockerComposeFile"]
+        .as_array()
+        .cloned()
+        .or_else(|| {
+            devcontainer_json_value["dockerComposeFile"]
+                .as_str()
+                .map(|s| vec![Value::String(s.into())])
+        })
+    else {
+        return Ok(None);
+    };
+
+    let services: Vec<_> = docker_compose_paths
+        .iter()
+        .filter_map(|path| {
+            let path = path.as_str()?;
+            let path = Path::new(path);
+            if path.exists() {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .map(|path| {
+            let path = path.to_path_buf();
+            let contents = fs::read_to_string(&path)
+                .into_diagnostic()
+                .wrap_err_with(|| miette!("failed to read {}", path.display()))?;
+
+            let value: Value = serde_yaml::from_str(&contents)
+                .into_diagnostic()
+                .wrap_err("failed to parse docker-compose.yml")?;
+
+            Ok(value["services"]
+                .as_object()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(k, _)| k))
+        })
+        .collect::<Result<Vec<_>>>()
+        .wrap_err("failed to parse some of docker-compose.yml")?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    let mut overriden_compose_yaml =
+        NamedTempFile::new().expect("failed to create temp file for overriding remote user");
+
+    let value = Value::Object(
+        [(
+            "services".into(),
+            Value::Object(
+                services
+                    .into_iter()
+                    .map(|service| {
+                        (
+                            service,
+                            Value::Object(
+                                [(
+                                    "extra_hosts".into(),
+                                    Value::String("host.docker.internal:host-gateway".into()),
+                                )]
+                                .into_iter()
+                                .collect(),
+                            ),
+                        )
+                    })
+                    .collect(),
+            ),
+        )]
+        .into_iter()
+        .collect(),
+    );
+
+    overriden_compose_yaml
+        .write_all(
+            serde_yaml::to_string(&value)
+                .into_diagnostic()
+                .wrap_err("failed to format config")?
+                .as_bytes(),
+        )
+        .into_diagnostic()
+        .wrap_err("failed to write to override config")?;
+
+    Ok(Some(overriden_compose_yaml))
 }
 
 #[derive(Debug)]
