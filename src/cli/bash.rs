@@ -14,8 +14,7 @@ pub fn main(config: &Config, args: &Args, shell_args: &BashArgs) -> Result<()> {
     dc.exec(&args, RootMode::No).wrap_err_with(|| {
         miette!(
             help = "try `dockim build --rebuild` first",
-            "failed to execute `{}` on the container",
-            config.shell
+            "failed to execute `bash` on the container",
         )
     })?;
 
