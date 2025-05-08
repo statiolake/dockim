@@ -5,7 +5,7 @@ use crate::{
 };
 use miette::{miette, Result, WrapErr};
 
-pub fn main(config: &Config, args: &Args, shell_args: &BashArgs) -> Result<()> {
+pub fn main(_config: &Config, args: &Args, shell_args: &BashArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone())
         .wrap_err("failed to initialize devcontainer client")?;
 

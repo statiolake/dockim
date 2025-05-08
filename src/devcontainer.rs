@@ -63,33 +63,21 @@ impl DevContainer {
     }
 
     pub fn up(&self, rebuild: bool, build_no_cache: bool) -> Result<()> {
-        let workspace_folder = self.workspace_folder.to_string_lossy();
-        let mut args = vec![
-            "devcontainer",
-            "up",
-            "--workspace-folder",
-            &*workspace_folder,
-        ];
+        let mut args = self.make_args(RootMode::No, "up");
 
         if rebuild {
-            args.push("--remove-existing-container");
+            args.push("--remove-existing-container".into());
         }
 
         if build_no_cache {
-            args.push("--build-no-cache");
+            args.push("--build-no-cache".into());
         }
 
         exec::exec(&args)
     }
 
     pub fn up_and_inspect(&self) -> Result<UpOutput> {
-        let workspace_folder = self.workspace_folder.to_string_lossy();
-        let args = [
-            "devcontainer",
-            "up",
-            "--workspace-folder",
-            &*workspace_folder,
-        ];
+        let args = self.make_args(RootMode::No, "up");
 
         exec::capturing_stdout(&args)
             .and_then(|output| serde_json::from_str(&output).into_diagnostic())
@@ -141,14 +129,14 @@ impl DevContainer {
     }
 
     pub fn spawn<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<Child> {
-        let mut args = self.make_devcontainer_cli_args(root_mode);
+        let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_owned()));
 
         exec::spawn(&args)
     }
 
     pub fn exec<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<()> {
-        let mut args = self.make_devcontainer_cli_args(root_mode);
+        let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_owned()));
 
         exec::exec(&args)
@@ -159,7 +147,7 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<String> {
-        let mut args = self.make_devcontainer_cli_args(root_mode);
+        let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_owned()));
 
         exec::capturing_stdout(&args)
@@ -171,7 +159,7 @@ impl DevContainer {
         stdin: Stdio,
         root_mode: RootMode,
     ) -> Result<()> {
-        let mut args = self.make_devcontainer_cli_args(root_mode);
+        let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_owned()));
 
         exec::with_stdin(&args, stdin)
@@ -183,7 +171,7 @@ impl DevContainer {
         stdin: &[u8],
         root_mode: RootMode,
     ) -> Result<()> {
-        let mut args = self.make_devcontainer_cli_args(root_mode);
+        let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_owned()));
 
         exec::with_bytes_stdin(&args, stdin)
@@ -318,11 +306,11 @@ impl DevContainer {
         ))
     }
 
-    fn make_devcontainer_cli_args(&self, root_mode: RootMode) -> Vec<String> {
+    fn make_args(&self, root_mode: RootMode, subcommand: &str) -> Vec<String> {
         let workspace_folder = self.workspace_folder.to_string_lossy().to_string();
         let mut args = vec![
             "devcontainer".to_owned(),
-            "exec".to_owned(),
+            subcommand.to_owned(),
             "--workspace-folder".to_owned(),
             workspace_folder,
         ];
