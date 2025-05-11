@@ -73,8 +73,8 @@ pub struct BuildArgs {
 
 #[derive(Debug, clap::Parser)]
 pub struct NeovimArgs {
-    #[clap(long, default_value = "true")]
-    pub use_remote: bool,
+    #[clap(long, default_value = "false")]
+    pub no_remote_ui: bool,
 
     #[clap(short, long, default_value = "54321")]
     pub host_port: String,

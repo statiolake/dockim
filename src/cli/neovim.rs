@@ -51,12 +51,12 @@ pub fn main(_config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<(
         }
     }
 
-    if neovim_args.use_remote {
-        // Run Neovim server in the container and connect to it
-        run_neovim_server_and_attach(&dc, &neovim_args.host_port, &neovim_args.container_port)
-    } else {
+    if neovim_args.no_remote_ui {
         // Run Neovim in container
         run_neovim_directly(&dc)
+    } else {
+        // Run Neovim server in the container and connect to it
+        run_neovim_server_and_attach(&dc, &neovim_args.host_port, &neovim_args.container_port)
     }
 }
 fn run_neovim_server_and_attach(
