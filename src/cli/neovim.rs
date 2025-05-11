@@ -1,6 +1,8 @@
 use std::{
     net::TcpListener,
     process::{Command, Stdio},
+    thread,
+    time::Duration,
 };
 
 use miette::{Context, IntoDiagnostic, Result};
@@ -71,9 +73,27 @@ fn run_neovim_server_and_attach(
     // Set up port forwarding
     let _guard = dc.forward_port(host_port, container_port)?;
 
-    // Connect to Neovim from the host
-    let server = format!("localhost:{}", host_port);
-    exec::exec(&["nvim", "--server", &server, "--remote-ui"])?;
+    loop {
+        // Connect to Neovim from the host. Try multiple times because it sometimes fails
+        let server = format!("localhost:{}", host_port);
+        match exec::exec(&["nvim", "--server", &server, "--remote-ui"]) {
+            Ok(_) => break,
+            Err(e) => {
+                let is_server_finished = nvim.try_wait().map_or(true, |s| s.is_some());
+                if is_server_finished {
+                    return Err(e).wrap_err(
+                        "Connection to Neovim server failed and the server process exited",
+                    );
+                }
+
+                log!(
+                    "Waiting":
+                    "Connection to Neovim failed: {e}; try reconnecting after a few seconds"
+                );
+                thread::sleep(Duration::from_secs(5));
+            }
+        }
+    }
 
     // Cleanup server process
     nvim.kill().into_diagnostic()?;
