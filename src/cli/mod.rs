@@ -6,7 +6,6 @@ pub mod bash;
 pub mod build;
 pub mod down;
 pub mod exec;
-pub mod neovide;
 pub mod neovim;
 pub mod port;
 pub mod shell;
@@ -34,8 +33,6 @@ pub enum Subcommand {
 
     #[clap(alias = "v")]
     Neovim(NeovimArgs),
-
-    Neovide(NeovideArgs),
 
     #[clap(alias = "sh")]
     Shell(ShellArgs),
@@ -76,19 +73,10 @@ pub struct NeovimArgs {
     #[clap(long, default_value = "false")]
     pub no_remote_ui: bool,
 
-    #[clap(short, long, default_value = "54321")]
+    #[clap(short = 'p', long, default_value = "54321")]
     pub host_port: String,
 
-    #[clap(short, long, default_value = "54321")]
-    pub container_port: String,
-}
-
-#[derive(Debug, clap::Parser)]
-pub struct NeovideArgs {
-    #[clap(short, long, default_value = "54321")]
-    pub host_port: String,
-
-    #[clap(short, long, default_value = "54321")]
+    #[clap(long, default_value = "54321")]
     pub container_port: String,
 }
 

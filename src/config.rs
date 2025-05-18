@@ -3,6 +3,8 @@ use std::{fs, path::PathBuf};
 use miette::{miette, Context, IntoDiagnostic, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::cli::neovim::SERVER_PLACEHOLDER;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_shell")]
@@ -16,6 +18,24 @@ pub struct Config {
 
     #[serde(default = "default_dotfiles_install_command")]
     pub dotfiles_install_command: String,
+
+    #[serde(default)]
+    pub remote: RemoteConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RemoteConfig {
+    #[serde(default = "default_remote_args_windows")]
+    pub args_windows: Vec<String>,
+
+    #[serde(default = "default_remote_args_unix")]
+    pub args_unix: Vec<String>,
+
+    #[serde(default = "default_remote_background")]
+    pub background: bool,
+
+    #[serde(default = "default_remote_use_clipboard_server")]
+    pub use_clipboard_server: bool,
 }
 
 impl Default for Config {
@@ -25,6 +45,18 @@ impl Default for Config {
             neovim_version: default_neovim_version(),
             dotfiles_repository_name: default_dotfiles_repository_name(),
             dotfiles_install_command: default_dotfiles_install_command(),
+            remote: RemoteConfig::default(),
+        }
+    }
+}
+
+impl Default for RemoteConfig {
+    fn default() -> Self {
+        RemoteConfig {
+            args_windows: default_remote_args_windows(),
+            args_unix: default_remote_args_unix(),
+            background: default_remote_background(),
+            use_clipboard_server: default_remote_use_clipboard_server(),
         }
     }
 }
@@ -43,6 +75,32 @@ fn default_dotfiles_repository_name() -> String {
 
 fn default_dotfiles_install_command() -> String {
     "echo 'no dotfiles install command configured'".to_string()
+}
+
+fn default_remote_args_unix() -> Vec<String> {
+    vec![
+        "nvim".to_string(),
+        "--server".to_string(),
+        SERVER_PLACEHOLDER.to_string(),
+        "--remote-ui".to_string(),
+    ]
+}
+
+fn default_remote_args_windows() -> Vec<String> {
+    vec![
+        "nvim".to_string(),
+        "--server".to_string(),
+        SERVER_PLACEHOLDER.to_string(),
+        "--remote-ui".to_string(),
+    ]
+}
+
+fn default_remote_background() -> bool {
+    false
+}
+
+fn default_remote_use_clipboard_server() -> bool {
+    true
 }
 
 impl Config {

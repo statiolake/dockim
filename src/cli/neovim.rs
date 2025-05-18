@@ -1,11 +1,12 @@
 use std::{
-    net::TcpListener,
+    cell::RefCell,
+    mem,
     process::{Command, Stdio},
     thread,
     time::Duration,
 };
 
-use miette::{Context, IntoDiagnostic, Result};
+use miette::{Context, Result};
 use scopeguard::defer;
 
 use crate::{
@@ -15,35 +16,30 @@ use crate::{
     exec, log,
 };
 
-pub fn find_unused_port() -> Result<u16> {
-    // ランダムな空きポートを取得
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .into_diagnostic()
-        .wrap_err("failed to bind to random port")?;
-    let port = listener
-        .local_addr()
-        .into_diagnostic()
-        .wrap_err("failed to get local address")?
-        .port();
-    Ok(port)
-}
+pub const SERVER_PLACEHOLDER: &str = "{server}";
 
-pub fn main(_config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
+pub fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone())
         .wrap_err("failed to initialize devcontainer client")?;
 
     // Run csrv for clipboard support if exists
-    let csrv = Command::new("csrv")
-        .env("CSRV_PORT", "55232")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok();
+    let csrv = if config.remote.use_clipboard_server {
+        let csrv = Command::new("csrv")
+            .env("CSRV_PORT", "55232")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok();
 
-    if csrv.is_some() {
-        log!("Started": "csrv");
-    }
+        if csrv.is_some() {
+            log!("Started": "csrv");
+        }
+
+        csrv
+    } else {
+        None
+    };
 
     defer! {
         if let Some(mut csrv) = csrv {
@@ -58,48 +54,13 @@ pub fn main(_config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<(
         run_neovim_directly(&dc)
     } else {
         // Run Neovim server in the container and connect to it
-        run_neovim_server_and_attach(&dc, &neovim_args.host_port, &neovim_args.container_port)
+        run_neovim_server_and_attach(
+            config,
+            &dc,
+            &neovim_args.host_port,
+            &neovim_args.container_port,
+        )
     }
-}
-fn run_neovim_server_and_attach(
-    dc: &DevContainer,
-    host_port: &str,
-    container_port: &str,
-) -> Result<()> {
-    // Start Neovim server in the container
-    let listen = format!("0.0.0.0:{}", container_port);
-    let mut nvim = dc.spawn(&["nvim", "--headless", "--listen", &listen], RootMode::No)?;
-
-    // Set up port forwarding
-    let _guard = dc.forward_port(host_port, container_port)?;
-
-    loop {
-        // Connect to Neovim from the host. Try multiple times because it sometimes fails
-        let server = format!("localhost:{}", host_port);
-        match exec::exec(&["nvim", "--server", &server, "--remote-ui"]) {
-            Ok(_) => break,
-            Err(e) => {
-                let is_server_finished = nvim.try_wait().map_or(true, |s| s.is_some());
-                if is_server_finished {
-                    return Err(e).wrap_err(
-                        "Connection to Neovim server failed and the server process exited",
-                    );
-                }
-
-                log!(
-                    "Waiting":
-                    "Connection to Neovim failed: {e}; try reconnecting after a few seconds"
-                );
-                thread::sleep(Duration::from_secs(5));
-            }
-        }
-    }
-
-    // Cleanup server process
-    nvim.kill().into_diagnostic()?;
-    nvim.wait().into_diagnostic()?;
-
-    Ok(())
 }
 
 fn run_neovim_directly(dc: &DevContainer) -> Result<()> {
@@ -113,4 +74,70 @@ fn run_neovim_directly(dc: &DevContainer) -> Result<()> {
         ],
         RootMode::No,
     )
+}
+
+fn run_neovim_server_and_attach(
+    config: &Config,
+    dc: &DevContainer,
+    host_port: &str,
+    container_port: &str,
+) -> Result<()> {
+    // Start Neovim server in the container
+    let listen = format!("0.0.0.0:{}", container_port);
+    let nvim = RefCell::new(dc.spawn(&["nvim", "--headless", "--listen", &listen], RootMode::No)?);
+    defer! {
+        let _ = nvim.borrow_mut().kill();
+        let _ = nvim.borrow_mut().wait();
+    }
+
+    // Set up port forwarding
+    let guard = dc.forward_port(host_port, container_port)?;
+    if config.remote.background {
+        // Normally we want to remove the port forwarding when the server exits, but in the
+        // background mode we want to keep it alive.
+        mem::forget(guard);
+    }
+
+    // Prepare execution arguments
+    let server = format!("localhost:{}", host_port);
+    let is_windows = cfg!(windows);
+    let is_wsl = exec::capturing_stdout(&["uname", "-r"]).is_ok_and(|s| s.contains("Microsoft"));
+    let mut args = if is_windows || is_wsl {
+        config.remote.args_windows.clone()
+    } else {
+        config.remote.args_unix.clone()
+    };
+    for arg in &mut args {
+        if arg == SERVER_PLACEHOLDER {
+            *arg = server.clone();
+        }
+    }
+
+    loop {
+        // Connect to Neovim from the host. Try multiple times because it sometimes fails
+        let child = if config.remote.background {
+            exec::spawn(&args).map(|_| ())
+        } else {
+            exec::exec(&args)
+        };
+        match child {
+            Ok(_) => break,
+            Err(e) => {
+                let is_server_finished = nvim.borrow_mut().try_wait().map_or(true, |s| s.is_some());
+                if is_server_finished {
+                    return Err(e).wrap_err(
+                        "Connection to Neovim server failed and the server process exited",
+                    );
+                }
+
+                log!(
+                    "Waiting":
+                    "Connection to Neovim failed: {e}; try reconnecting in a few seconds"
+                );
+                thread::sleep(Duration::from_secs(5));
+            }
+        }
+    }
+
+    Ok(())
 }
