@@ -8,11 +8,10 @@ use dockim::{
 use miette::{bail, Result};
 
 fn main() -> Result<()> {
-    check_requirements()?;
-
-    let config = Config::load_config()?;
-
     let args = Args::parse();
+
+    check_requirements()?;
+    let config = Config::load_config()?;
     match &args.subcommand {
         Subcommand::Up(up_args) => up::main(&config, &args, up_args),
         Subcommand::Build(build_args) => build::main(&config, &args, build_args),
