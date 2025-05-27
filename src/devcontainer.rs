@@ -535,7 +535,9 @@ fn generate_overriden_compose_yaml(workspace_folder: &Path) -> Result<Option<Nam
                             Value::Object(
                                 [(
                                     "extra_hosts".into(),
-                                    Value::String("host.docker.internal:host-gateway".into()),
+                                    Value::Array(vec![Value::String(
+                                        "host.docker.internal:host-gateway".into(),
+                                    )]),
                                 )]
                                 .into_iter()
                                 .collect(),
