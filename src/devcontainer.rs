@@ -46,7 +46,7 @@ impl RootMode {
 
 impl DevContainer {
     pub fn is_cli_installed() -> bool {
-        exec::exec(&["devcontainer", "--version"]).is_ok()
+        exec::exec(&[&*Self::devcontainer_command(), "--version"]).is_ok()
     }
 
     pub fn new(workspace_folder: Option<PathBuf>) -> Result<Self> {
@@ -309,7 +309,7 @@ impl DevContainer {
     fn make_args(&self, root_mode: RootMode, subcommand: &str) -> Vec<String> {
         let workspace_folder = self.workspace_folder.to_string_lossy().to_string();
         let mut args = vec![
-            "devcontainer".to_owned(),
+            Self::devcontainer_command(),
             subcommand.to_owned(),
             "--workspace-folder".to_owned(),
             workspace_folder,
@@ -334,6 +334,14 @@ impl DevContainer {
         }
 
         args
+    }
+
+    fn devcontainer_command() -> String {
+        if cfg!(target_os = "windows") {
+            "devcontainer.cmd".to_owned()
+        } else {
+            "devcontainer".to_owned()
+        }
     }
 }
 
