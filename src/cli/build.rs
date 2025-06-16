@@ -129,9 +129,7 @@ fn install_prerequisites(dc: &DevContainer) -> Result<()> {
         "ripgrep",
         "tree",
         "git",
-        "xclip",
         "python3",
-        "python3-pip",
         "tzdata",
         "git-secrets",
     ];
@@ -140,8 +138,19 @@ fn install_prerequisites(dc: &DevContainer) -> Result<()> {
     dc.exec(&["mkdir", "-p", "/tmp"], RootMode::Yes)?;
     dc.exec(&["chmod", "777", "/tmp"], RootMode::Yes)?;
     dc.exec(&["apt-get", "update"], RootMode::Yes)?;
+
     dc.exec(
-        &chain!(&["apt-get", "-y", "install"], prerequisites).collect_vec(),
+        &chain!(
+            &[
+                "env",
+                "DEBIAN_FRONTEND=noninteractive",
+                "apt-get",
+                "-y",
+                "install"
+            ],
+            prerequisites
+        )
+        .collect_vec(),
         RootMode::Yes,
     )?;
 
