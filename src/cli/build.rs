@@ -35,21 +35,12 @@ fn enable_host_docker_internal_in_rancher_desktop_on_lima(dc: &DevContainer) -> 
         return Ok(());
     }
 
-    let container_hosts = dc
-        .exec_capturing_stdout(&["cat", "/etc/hosts"], RootMode::No)
-        .wrap_err("failed to read /etc/hosts")?;
-
-    if container_hosts.contains("host.docker.internal") {
-        // host.docker.internal already exists in /etc/hosts, skipping
-        return Ok(());
-    }
-
     let host_ip_addr = {
         let vm_hosts = exec::capturing_stdout(&["rdctl", "shell", "cat", "/etc/hosts"])
             .wrap_err("failed to read /etc/hosts on Rancher Desktop VM")?;
         let Some(ip_addr) = vm_hosts.lines().find_map(|line| {
             let parts = line.split_whitespace().collect_vec();
-            if parts[1] == "host.lima.internal" {
+            if parts.len() >= 2 && parts[1] == "host.lima.internal" {
                 Some(parts[0].to_string())
             } else {
                 None
@@ -62,12 +53,18 @@ fn enable_host_docker_internal_in_rancher_desktop_on_lima(dc: &DevContainer) -> 
         ip_addr
     };
 
+    // 既存の host.docker.internal エントリを削除し、新しいエントリを追加
     dc.exec(
         &[
             "sh",
             "-c",
             &format!(
-                "echo '{host_ip_addr} host.docker.internal' | tee -a /etc/hosts",
+                concat!(
+                    "grep -v 'host.docker.internal' /etc/hosts > /tmp/hosts.tmp && ",
+                    "echo '{host_ip_addr} host.docker.internal' >> /tmp/hosts.tmp && ",
+                    "cp /tmp/hosts.tmp /etc/hosts && ",
+                    "rm /tmp/hosts.tmp"
+                ),
                 host_ip_addr = host_ip_addr
             ),
         ],
