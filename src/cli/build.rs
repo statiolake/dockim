@@ -1,5 +1,5 @@
 use dirs::home_dir;
-use itertools::{chain, Itertools};
+use itertools::Itertools;
 use miette::{miette, Result, WrapErr};
 
 use crate::{
@@ -101,10 +101,7 @@ fn enable_host_docker_internal_in_linux_dockerd(dc: &DevContainer) -> Result<()>
         &[
             "sh",
             "-c",
-            &format!(
-                "echo '{host_ip_addr} host.docker.internal' | tee -a /etc/hosts",
-                host_ip_addr = host_ip_addr
-            ),
+            &format!("echo '{host_ip_addr} host.docker.internal' | tee -a /etc/hosts",),
         ],
         RootMode::Yes,
     )?;
@@ -132,22 +129,20 @@ fn install_prerequisites(dc: &DevContainer) -> Result<()> {
     ];
 
     // Sometimes apt-get update fails without 777 permissions on /tmp
-    dc.exec(&["mkdir", "-p", "/tmp"], RootMode::Yes)?;
-    dc.exec(&["chmod", "777", "/tmp"], RootMode::Yes)?;
-    dc.exec(&["apt-get", "update"], RootMode::Yes)?;
-
     dc.exec(
-        &chain!(
-            &[
-                "env",
-                "DEBIAN_FRONTEND=noninteractive",
-                "apt-get",
-                "-y",
-                "install"
-            ],
-            prerequisites
-        )
-        .collect_vec(),
+        &[
+            "sh",
+            "-c",
+            &format!(
+                concat!(
+                    "mkdir -p /tmp && ",
+                    "chmod 777 /tmp && ",
+                    "apt-get update && ",
+                    "env DEBIAN_FRONTEND=noninteractive apt-get -y install {prerequisites}"
+                ),
+                prerequisites = prerequisites.join(" ")
+            ),
+        ],
         RootMode::Yes,
     )?;
 
@@ -178,29 +173,22 @@ fn install_neovim(config: &Config, dc: &DevContainer) -> Result<()> {
         config.neovim_version, arch
     );
 
-    // Ignore error here to avoid failing if the file doesn't exist
-    let _ = dc.exec(&["rm", "-f", "/tmp/nvim.tar.gz"], RootMode::No);
-
-    dc.exec(
-        &["curl", "-L", "-o", "/tmp/nvim.tar.gz", &download_url],
-        RootMode::No,
-    )?;
-
-    // Since all files in the archive are in nvim-linux-x86_64/ directory, we
-    // need to strip the first path component.
     dc.exec(
         &[
-            "tar",
-            "--strip-components=1",
-            "-C",
-            "/usr/local",
-            "-xzf",
-            "/tmp/nvim.tar.gz",
+            "sh",
+            "-c",
+            &format!(
+                concat!(
+                    "rm -f /tmp/nvim.tar.gz && ",
+                    "curl -L -o /tmp/nvim.tar.gz {download_url} && ",
+                    "tar --strip-components=1 -C /usr/local -xzf /tmp/nvim.tar.gz && ",
+                    "rm -f /tmp/nvim.tar.gz"
+                ),
+                download_url = download_url
+            ),
         ],
         RootMode::Yes,
     )?;
-
-    dc.exec(&["rm", "-f", "/tmp/nvim.tar.gz"], RootMode::No)?;
 
     Ok(())
 }
@@ -250,9 +238,18 @@ fn copy_copilot(dc: &DevContainer) -> Result<()> {
 }
 
 fn prepare_opt_dir(dc: &DevContainer, owner_user: &str) -> Result<()> {
-    dc.exec(&["mkdir", "-p", "/opt"], RootMode::Yes)?;
     dc.exec(
-        &["chown", "-R", &format!("{owner_user}:{owner_user}"), "/opt"],
+        &[
+            "sh",
+            "-c",
+            &format!(
+                concat!(
+                    "mkdir -p /opt && ",
+                    "chown -R {owner_user}:{owner_user} /opt"
+                ),
+                owner_user = owner_user
+            ),
+        ],
         RootMode::Yes,
     )?;
 
@@ -260,20 +257,19 @@ fn prepare_opt_dir(dc: &DevContainer, owner_user: &str) -> Result<()> {
 }
 
 fn install_dotfiles(config: &Config, dc: &DevContainer) -> Result<()> {
-    let _ = dc.exec(&["rm", "-rf", "/opt/dotfiles"], RootMode::No);
     dc.exec(
         &[
             "sh",
             "-c",
-            "~/.local/bin/gh repo clone dotfiles /opt/dotfiles",
-        ],
-        RootMode::No,
-    )?;
-    dc.exec(
-        &[
-            "sh",
-            "-c",
-            &format!("cd /opt/dotfiles; {}", config.dotfiles_install_command),
+            &format!(
+                concat!(
+                    "rm -rf /opt/dotfiles && ",
+                    "~/.local/bin/gh repo clone dotfiles /opt/dotfiles && ",
+                    "cd /opt/dotfiles && ",
+                    "{dotfiles_install_command}"
+                ),
+                dotfiles_install_command = config.dotfiles_install_command
+            ),
         ],
         RootMode::No,
     )?;
