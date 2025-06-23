@@ -12,6 +12,7 @@ dirs = "5.0.1"
 itertools = "0.12.1"
 maplit = "1.0.2"
 miette = { version = "7.2.0", features = ["fancy"] }
+rand = "0.9.1"
 scopeguard = "1.2.0"
 serde = { version = "1.0.198", features = ["derive"] }
 serde-hjson = "1.1.0"

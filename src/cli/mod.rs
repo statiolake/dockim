@@ -82,11 +82,11 @@ pub struct NeovimArgs {
     #[clap(long, default_value = "false")]
     pub no_remote_ui: bool,
 
-    #[clap(short = 'p', long, default_value = "54321")]
-    pub host_port: String,
+    #[clap(short = 'p', long)]
+    pub host_port: Option<String>,
 
-    #[clap(long, default_value = "54321")]
-    pub container_port: String,
+    #[clap(long)]
+    pub container_port: Option<String>,
 }
 
 #[derive(Debug, clap::Parser)]

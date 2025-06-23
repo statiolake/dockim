@@ -1,4 +1,5 @@
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -6,6 +7,7 @@ use std::{
     collections::HashMap,
     fs::{self, File},
     io::Write,
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, Stdio},
 };
@@ -359,6 +361,26 @@ impl DevContainer {
         }
 
         Ok(())
+    }
+
+    pub fn find_available_host_port(&self) -> Result<u16> {
+        let mut rng = rand::rng();
+
+        // Try random ports up to 1000 times
+        for _ in 0..1000 {
+            let port = rng.random_range(50000..60000);
+            if self.is_host_port_available(port) {
+                return Ok(port);
+            }
+        }
+
+        Err(miette!(
+            "No available ports found in range 50000-60000 after 1000 attempts"
+        ))
+    }
+
+    fn is_host_port_available(&self, port: u16) -> bool {
+        TcpListener::bind(("127.0.0.1", port)).is_ok()
     }
 
     fn socat_container_name(&self, host_port: &str) -> Result<String> {

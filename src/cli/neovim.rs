@@ -53,13 +53,24 @@ pub fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()
         // Run Neovim in container
         run_neovim_directly(&dc)
     } else {
+        // Determine ports (auto-select host port if not specified, container port is always 54321)
+        let (host_port, container_port) = if let Some(host_port) = &neovim_args.host_port {
+            (
+                host_port.clone(),
+                neovim_args
+                    .container_port
+                    .as_deref()
+                    .unwrap_or("54321")
+                    .to_string(),
+            )
+        } else {
+            let auto_host_port = dc.find_available_host_port()?;
+            println!("Auto-selected host port: {}", auto_host_port);
+            (auto_host_port.to_string(), "54321".to_string())
+        };
+
         // Run Neovim server in the container and connect to it
-        run_neovim_server_and_attach(
-            config,
-            &dc,
-            &neovim_args.host_port,
-            &neovim_args.container_port,
-        )
+        run_neovim_server_and_attach(config, &dc, &host_port, &container_port)
     }
 }
 
