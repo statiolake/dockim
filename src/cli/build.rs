@@ -263,25 +263,14 @@ fn login_to_gh(dc: &DevContainer) -> Result<()> {
 }
 
 fn copy_copilot(dc: &DevContainer) -> Result<()> {
-    dc.exec(
-        &["sh", "-c", "mkdir -p ~/.config/github-copilot"],
-        RootMode::No,
-    )?;
-
     let local_home = home_dir().ok_or_else(|| miette!("failed to get local home directory"))?;
-    let remote_home = dc
-        .exec_capturing_stdout(&["sh", "-c", "readlink -f $(echo $HOME)"], RootMode::No)
-        .wrap_err("failed to get remote home directory")?
-        .trim()
-        .to_string();
-
     for file in ["apps.json", "hosts.json", "versions.json"] {
         let local_path = local_home.join(".config").join("github-copilot").join(file);
         if !local_path.exists() {
             continue;
         }
 
-        let remote_path = format!("{remote_home}/.config/github-copilot/{file}");
+        let remote_path = format!("$(readlink -f $(echo $HOME))/.config/github-copilot/{file}");
         dc.copy_file_host_to_container(&local_path, &remote_path, RootMode::No)?;
     }
 

@@ -207,26 +207,16 @@ impl DevContainer {
             .into_diagnostic()
             .wrap_err_with(|| miette!("failed to open {}", src_host.display()))?;
 
-        self.exec(
-            &["sh", "-c", &format!("mkdir -p $(dirname {dst_container})")],
-            root_mode,
-        )
-        .wrap_err_with(|| {
-            miette!(
-                "failed to create parent directory of `{}` on container",
-                dst_container,
-            )
-        })?;
-
-        let cat_cmd = format!("cat > {}", dst_container);
+        // Combine mkdir and cat into a single command
+        let combined_cmd = format!("mkdir -p $(dirname {}) && cat > {}", dst_container, dst_container);
         self.exec_with_stdin(
-            &["sh", "-c", &cat_cmd],
+            &["sh", "-c", &combined_cmd],
             Stdio::from(src_host_file),
             root_mode,
         )
         .wrap_err_with(|| {
             miette!(
-                "failed to write file contents to `{}` on container",
+                "failed to create directory and write file contents to `{}` on container",
                 dst_container
             )
         })
