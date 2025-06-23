@@ -2,6 +2,7 @@ use miette::{miette, IntoDiagnostic, Result, WrapErr};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    cell::RefCell,
     collections::HashMap,
     fs::{self, File},
     io::Write,
@@ -30,6 +31,7 @@ pub struct UpOutput {
 pub struct DevContainer {
     workspace_folder: PathBuf,
     overriden_config_paths: OverridenConfigPaths,
+    cached_up_output: RefCell<Option<UpOutput>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -59,10 +61,11 @@ impl DevContainer {
         Ok(DevContainer {
             workspace_folder: workspace_folder.unwrap_or_else(|| PathBuf::from(".")),
             overriden_config_paths: overriden_config,
+            cached_up_output: RefCell::new(None),
         })
     }
 
-    pub fn up(&self, rebuild: bool, build_no_cache: bool) -> Result<()> {
+    pub fn up(&self, rebuild: bool, build_no_cache: bool) -> Result<UpOutput> {
         let mut args = self.make_args(RootMode::No, "up");
 
         if rebuild {
@@ -73,18 +76,33 @@ impl DevContainer {
             args.push("--build-no-cache".into());
         }
 
-        exec::exec(&args)
+        let result: UpOutput = exec::capturing_stdout(&args)
+            .and_then(|output| serde_json::from_str(&output).into_diagnostic())?;
+
+        // Cache the result
+        *self.cached_up_output.borrow_mut() = Some(result.clone());
+
+        Ok(result)
     }
 
-    pub fn up_and_inspect(&self) -> Result<UpOutput> {
-        let args = self.make_args(RootMode::No, "up");
+    pub fn inspect(&self) -> Result<UpOutput> {
+        // Check cache first
+        if let Some(cached) = self.cached_up_output.borrow().as_ref() {
+            return Ok(cached.clone());
+        }
 
-        exec::capturing_stdout(&args)
-            .and_then(|output| serde_json::from_str(&output).into_diagnostic())
+        // If no cache, we need to run up first
+        let args = self.make_args(RootMode::No, "up");
+        let result: UpOutput = exec::capturing_stdout(&args)
+            .and_then(|output| serde_json::from_str(&output).into_diagnostic())?;
+
+        // Cache the result
+        *self.cached_up_output.borrow_mut() = Some(result.clone());
+        Ok(result)
     }
 
     fn get_compose_project(&self) -> Result<(String, Option<String>)> {
-        let up_output = self.up_and_inspect()?;
+        let up_output = self.inspect()?;
         let container_id = up_output.container_id;
 
         let labels = exec::capturing_stdout(&[
@@ -113,6 +131,8 @@ impl DevContainer {
         } else {
             exec::exec(&["docker", "stop", &container_id]).wrap_err("failed to stop container")?;
         }
+        // Clear cache after stopping container
+        *self.cached_up_output.borrow_mut() = None;
         Ok(())
     }
 
@@ -125,6 +145,8 @@ impl DevContainer {
             exec::exec(&["docker", "stop", &container_id]).wrap_err("failed to stop container")?;
             exec::exec(&["docker", "rm", &container_id]).wrap_err("failed to remove container")?;
         }
+        // Clear cache after removing container
+        *self.cached_up_output.borrow_mut() = None;
         Ok(())
     }
 
@@ -217,7 +239,7 @@ impl DevContainer {
             .socat_container_name(host_port)
             .wrap_err("failed to determine port-forwarding container name")?;
         let up_output = self
-            .up_and_inspect()
+            .inspect()
             .wrap_err("failed to get devcontainer status")?;
 
         #[derive(Debug, Deserialize)]
@@ -297,7 +319,7 @@ impl DevContainer {
 
     fn socat_container_name(&self, host_port: &str) -> Result<String> {
         let up_output = self
-            .up_and_inspect()
+            .inspect()
             .wrap_err("failed to get devcontainer status")?;
 
         Ok(format!(

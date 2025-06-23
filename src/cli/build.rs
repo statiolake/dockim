@@ -110,9 +110,7 @@ fn enable_host_docker_internal_in_linux_dockerd(dc: &DevContainer) -> Result<()>
 }
 
 fn devcontainer_up(dc: &DevContainer, rebuild: bool, no_cache: bool) -> Result<UpOutput> {
-    dc.up(rebuild, no_cache)?;
-
-    dc.up_and_inspect()
+    dc.up(rebuild, no_cache)
 }
 
 fn install_prerequisites(dc: &DevContainer, neovim_from_source: bool) -> Result<()> {
