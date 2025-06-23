@@ -1,15 +1,13 @@
 # 🐋 Dockim
 
-A modern CLI tool for managing Dev Containers with ease. Dockim simplifies your development workflow by providing intuitive commands for container management, Neovim integration, and port forwarding.
+A modern CLI tool for managing Dev Containers with ease. Dockim simplifies your development workflow by providing intuitive commands for container management and Neovim integration.
 
 ## ✨ Features
 
 - 🚀 **Quick Container Management** - Start, stop, and build dev containers effortlessly
-- 📝 **Neovim Integration** - Launch Neovim with automatic port forwarding and remote UI support
-- 🔌 **Smart Port Forwarding** - Automatic port selection and management
+- 📝 **Neovim Integration** - Launch Neovim with remote UI support
 - 🛠 **Project Initialization** - Generate dev container templates instantly
 - 🔧 **Flexible Configuration** - Support for custom builds and source compilation
-- 🎯 **Multiple Container Support** - Run multiple dev containers simultaneously
 
 ## 📦 Installation
 
@@ -71,58 +69,134 @@ dockim neovim --no-remote-ui
 
 ## 📋 Commands
 
-### Container Management
+### Project Setup
+
+#### `dockim init`
+Creates a new dev container configuration in the current directory.
 
 ```bash
-# Initialize dev container template
 dockim init
+```
 
-# Create default config file
+Generates:
+- `.devcontainer/devcontainer.json` - Dev container configuration
+- `.devcontainer/compose.yml` - Docker Compose configuration  
+- `.devcontainer/Dockerfile` - Custom Docker image definition
+
+#### `dockim init-config`
+Creates a default configuration file for dockim.
+
+```bash
 dockim init-config
+```
 
-# Build container with dependencies
+Creates `~/.config/dockim/config.toml` with default settings that you can customize.
+
+### Container Management
+
+#### `dockim build`
+Builds the dev container with all dependencies.
+
+```bash
+# Standard build
 dockim build
 
-# Build Neovim from source
-dockim build --neovim-from-source
+# Rebuild from scratch
+dockim build --rebuild
 
-# Start container
+# Build without Docker cache
+dockim build --no-cache
+
+# Build Neovim from source instead of using prebuilt binaries
+dockim build --neovim-from-source
+```
+
+#### `dockim up`
+Starts the dev container (builds if necessary).
+
+```bash
 dockim up
 
-# Stop container
+# Force rebuild and start
+dockim up --rebuild
+```
+
+#### `dockim stop` / `dockim down`
+Stops or removes the dev container.
+
+```bash
+# Stop container (keeps it for later restart)
 dockim stop
 
-# Remove container
+# Remove container completely
 dockim down
 ```
 
 ### Development Tools
 
+#### `dockim neovim` (alias: `dockim v`)
+Launches Neovim with remote UI support.
+
 ```bash
-# Launch Neovim (auto port selection)
-dockim neovim
-dockim v  # alias
+# Launch with automatic port selection
+dockim v
 
-# Launch with specific ports
-dockim v --host-port 8080 --container-port 54321
+# Launch with specific host port
+dockim v --host-port 8080
 
-# Direct container access
+# Launch directly in container (no remote UI)
+dockim v --no-remote-ui
+```
+
+The remote UI mode starts a Neovim server inside the container and connects to it from your host system using the configured client.
+
+#### `dockim shell` / `dockim bash`
+Opens an interactive shell in the container.
+
+```bash
+# Default shell (zsh)
 dockim shell
-dockim sh    # alias
+dockim sh  # alias
+
+# Bash specifically
 dockim bash
-dockim exec [command...]
+```
+
+#### `dockim exec`
+Executes a command in the container.
+
+```bash
+# Run a single command
+dockim exec ls -la
+
+# Run with arguments
+dockim exec git status
 ```
 
 ### Port Management
 
+#### `dockim port add`
+Sets up port forwarding from host to container.
+
 ```bash
-# Add port forwarding
+# Forward host:8080 to container:8080
+dockim port add 8080
+
+# Forward host:8080 to container:3000
 dockim port add 8080:3000
-dockim port add 8080        # forwards to same port
+```
 
-# List active port forwards
+#### `dockim port ls`
+Lists active port forwards.
+
+```bash
 dockim port ls
+```
 
+#### `dockim port rm`
+Removes port forwarding.
+
+```bash
 # Remove specific port forward
 dockim port rm 8080
 
@@ -132,145 +206,60 @@ dockim port rm --all
 
 ## ⚙️ Configuration
 
-Create a default configuration file:
+Configuration is stored in `~/.config/dockim/config.toml`. Create a default one with:
 
 ```bash
 dockim init-config
 ```
 
-This creates `~/.config/dockim/config.toml` with default settings:
+### Configuration Options
+
+#### `shell`
+Default shell to use in containers.
+```toml
+shell = "/usr/bin/bash"
+```
+
+#### `neovim_version`
+Neovim version to install when using `--neovim-from-source`.
+```toml
+neovim_version = "v0.11.0"
+```
+
+#### `dotfiles_repository_name`
+Name of your dotfiles repository for automatic setup.
+```toml
+dotfiles_repository_name = "dotfiles"
+```
+
+#### `dotfiles_install_command`
+Command to run after cloning your dotfiles.
+```toml
+dotfiles_install_command = "echo 'no dotfiles install command configured'"
+```
+
+#### Remote Neovim Settings
+
+Control how Neovim remote UI works:
 
 ```toml
-[neovim]
-version = "v0.10.0"
-
-[dotfiles]
-install_command = "./install.sh"
-
 [remote]
+# Run client in background (don't block terminal)
 background = false
+
+# Enable clipboard synchronization between host and container
 use_clipboard_server = true
 
-# Windows/WSL specific
-args_windows = ["neovide", "--server", "{server}"]
+# Command to run Neovim client on Windows/WSL
+# {server} is replaced with "localhost:PORT"
+args_windows = ["nvim", "--server", "{server}", "--remote-ui"]
 
-# Unix specific
-args_unix = ["neovim-qt", "--server", "{server}"]
+# Command to run Neovim client on Unix systems
+# {server} is replaced with "localhost:PORT"  
+args_unix = ["nvim", "--server", "{server}", "--remote-ui"]
 ```
 
-## 🏗️ Dev Container Template
-
-The generated `.devcontainer/devcontainer.json`:
-
-```json
-{
-  "name": "Development Container",
-  "dockerComposeFile": "compose.yml",
-  "service": "app",
-  "workspaceFolder": "/workspace",
-  "remoteUser": "vscode",
-
-  "customizations": {
-    "vscode": {
-      "extensions": ["ms-vscode.vscode-json"]
-    }
-  },
-
-  "postCreateCommand": "echo 'Container is ready!'",
-  "forwardPorts": [],
-  "portsAttributes": {}
-}
-```
-
-## 🔧 Advanced Usage
-
-### Custom Dockerfile
-
-The generated `Dockerfile` is fully customizable:
-
-```dockerfile
-FROM ubuntu:22.04
-
-# Install development tools
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    git \
-    sudo \
-    vim \
-    zsh
-
-# Create development user
-ARG USERNAME=vscode
-ARG USER_UID=1000
-ARG USER_GID=$USER_UID
-RUN groupadd --gid $USER_GID $USERNAME \
-    && useradd --uid $USER_UID --gid $USER_GID -m $USERNAME \
-    && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME
-
-USER vscode
-WORKDIR /workspace
-```
-
-### Multiple Containers
-
-Run multiple dev environments simultaneously:
-
-```bash
-# Terminal 1
-cd project-a
-dockim v  # Auto-selects port 52341
-
-# Terminal 2
-cd project-b
-dockim v  # Auto-selects port 51892
-
-# Terminal 3
-cd project-c
-dockim v  # Auto-selects port 55667
-```
-
-Each instance automatically selects an available port in the range 50000-60000.
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-**Port already in use:**
-
-```bash
-# Check active forwards
-dockim port ls
-
-# Remove conflicting forwards
-dockim port rm --all
-```
-
-**Container build fails:**
-
-```bash
-# Rebuild without cache
-dockim build --no-cache --rebuild
-```
-
-**Neovim connection issues:**
-
-```bash
-# Use direct mode
-dockim v --no-remote-ui
-
-# Check container status
-docker ps
-```
-
-### Debug Mode
-
-Set environment variable for verbose output:
-
-```bash
-export DOCKIM_DEBUG=1
-dockim build
-```
+The `{server}` placeholder gets replaced with the actual server address (e.g., `localhost:52341`) when launching the remote client.
 
 ## 🤝 Contributing
 
