@@ -17,8 +17,8 @@ pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> 
 
     enable_host_docker_internal_in_rancher_desktop_on_lima(&dc)?;
     enable_host_docker_internal_in_linux_dockerd(&dc)?;
-    install_prerequisites(&dc)?;
-    install_neovim(config, &dc)?;
+    install_prerequisites(&dc, build_args.neovim_from_source)?;
+    install_neovim(config, &dc, build_args.neovim_from_source)?;
     install_github_cli(&dc)?;
     login_to_gh(&dc)?;
     copy_copilot(&dc)?;
@@ -115,8 +115,8 @@ fn devcontainer_up(dc: &DevContainer, rebuild: bool, no_cache: bool) -> Result<U
     dc.up_and_inspect()
 }
 
-fn install_prerequisites(dc: &DevContainer) -> Result<()> {
-    let prerequisites = &[
+fn install_prerequisites(dc: &DevContainer, neovim_from_source: bool) -> Result<()> {
+    let mut prerequisites = vec![
         "zsh",
         "curl",
         "fzf",
@@ -127,6 +127,24 @@ fn install_prerequisites(dc: &DevContainer) -> Result<()> {
         "tzdata",
         "git-secrets",
     ];
+
+    if neovim_from_source {
+        prerequisites.extend_from_slice(&[
+            "python3-pip",
+            "python3-pynvim",
+            "ninja-build",
+            "gettext",
+            "libtool",
+            "libtool-bin",
+            "autoconf",
+            "automake",
+            "cmake",
+            "g++",
+            "pkg-config",
+            "zip",
+            "unzip",
+        ]);
+    }
 
     // Sometimes apt-get update fails without 777 permissions on /tmp
     dc.exec(
@@ -149,7 +167,7 @@ fn install_prerequisites(dc: &DevContainer) -> Result<()> {
     Ok(())
 }
 
-fn install_neovim(config: &Config, dc: &DevContainer) -> Result<()> {
+fn install_neovim(config: &Config, dc: &DevContainer, neovim_from_source: bool) -> Result<()> {
     if dc
         .exec_capturing_stdout(&["/usr/local/bin/nvim", "--version"], RootMode::No)
         .is_ok()
@@ -157,6 +175,14 @@ fn install_neovim(config: &Config, dc: &DevContainer) -> Result<()> {
         return Ok(());
     }
 
+    if neovim_from_source {
+        install_neovim_from_source(config, dc)
+    } else {
+        install_neovim_from_binary(config, dc)
+    }
+}
+
+fn install_neovim_from_binary(config: &Config, dc: &DevContainer) -> Result<()> {
     let arch = dc
         .exec_capturing_stdout(&["uname", "-m"], RootMode::No)
         .wrap_err("failed to determine system architecture")?
@@ -189,6 +215,33 @@ fn install_neovim(config: &Config, dc: &DevContainer) -> Result<()> {
         ],
         RootMode::Yes,
     )?;
+
+    Ok(())
+}
+
+fn install_neovim_from_source(config: &Config, dc: &DevContainer) -> Result<()> {
+    let _ = dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No);
+    dc.exec(&["mkdir", "-p", "/tmp/neovim"], RootMode::No)?;
+
+    dc.exec(
+        &[
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--no-single-branch",
+            "https://github.com/neovim/neovim",
+            "/tmp/neovim",
+        ],
+        RootMode::No,
+    )?;
+
+    let neovim_version = &config.neovim_version;
+    let make_cmd = format!("cd /tmp/neovim && (git checkout {neovim_version} || true) && make -j4");
+
+    dc.exec(&["sh", "-c", &make_cmd], RootMode::No)?;
+    dc.exec(&["sh", "-c", "cd /tmp/neovim && make install"], RootMode::Yes)?;
+    dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No)?;
 
     Ok(())
 }

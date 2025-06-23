@@ -66,6 +66,9 @@ pub struct BuildArgs {
 
     #[clap(long)]
     pub no_cache: bool,
+
+    #[clap(long)]
+    pub neovim_from_source: bool,
 }
 
 #[derive(Debug, clap::Parser)]
