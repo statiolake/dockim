@@ -27,6 +27,12 @@ pub struct UpOutput {
     pub remote_workspace_folder: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ForwardedPort {
+    pub host_port: String,
+    pub container_port: String,
+}
+
 #[derive(Debug)]
 pub struct DevContainer {
     workspace_folder: PathBuf,
@@ -208,7 +214,10 @@ impl DevContainer {
             .wrap_err_with(|| miette!("failed to open {}", src_host.display()))?;
 
         // Combine mkdir and cat into a single command
-        let combined_cmd = format!("mkdir -p $(dirname {}) && cat > {}", dst_container, dst_container);
+        let combined_cmd = format!(
+            "mkdir -p $(dirname {}) && cat > {}",
+            dst_container, dst_container
+        );
         self.exec_with_stdin(
             &["sh", "-c", &combined_cmd],
             Stdio::from(src_host_file),
@@ -287,19 +296,66 @@ impl DevContainer {
         exec::exec(&["docker", "stop", &socat_container_name])
     }
 
-    pub fn remove_all_forwarded_ports(&self) -> Result<()> {
+    pub fn list_forwarded_ports(&self) -> Result<Vec<ForwardedPort>> {
         let socat_container_name_prefix = self
             .socat_container_name("")
             .wrap_err("failed to determine port-forwarding container name")?;
 
         let name_filter = format!("name={socat_container_name_prefix}");
-        let port_forward_containers =
-            exec::capturing_stdout(&["docker", "ps", "-aq", "--filter", &name_filter])
-                .wrap_err("failed to enumerate port-forwarding containers")?;
+        let port_forward_containers = exec::capturing_stdout(&[
+            "docker",
+            "ps",
+            "--filter",
+            &name_filter,
+            "--format",
+            "{{.Names}}\t{{.Command}}",
+            "--no-trunc",
+        ])
+        .wrap_err("failed to enumerate port-forwarding containers")?;
 
-        let stop = |container_id: &str| exec::exec(&["docker", "stop", container_id]);
-        for port_forward_container in port_forward_containers.split_whitespace() {
-            stop(port_forward_container).wrap_err("failed to stop port-forwarding container")?;
+        let mut ports = Vec::new();
+        for line in port_forward_containers.lines() {
+            let Some((name, command)) = line.split_once('\t') else {
+                continue;
+            };
+
+            // Extract host port from container name: dockim-{container_id}-socat-{host_port}
+            let Some(host_port) = name.split('-').last() else {
+                continue;
+            };
+
+            // Extract container port from socat command
+            // Full command: "TCP-LISTEN:1234,fork TCP-CONNECT:172.17.0.2:8080"
+            let container_port = command
+                .split_whitespace()
+                .find_map(|arg| {
+                    if !arg.contains("TCP-CONNECT:") {
+                        return None;
+                    }
+                    // Extract port from "TCP-CONNECT:ip:port"
+                    arg.split("TCP-CONNECT:")
+                        .nth(1)?
+                        .split(':')
+                        .nth(1)?
+                        .trim_end_matches('"')
+                        .into()
+                })
+                .unwrap_or("unknown");
+
+            ports.push(ForwardedPort {
+                host_port: host_port.to_string(),
+                container_port: container_port.to_string(),
+            });
+        }
+
+        Ok(ports)
+    }
+
+    pub fn remove_all_forwarded_ports(&self) -> Result<()> {
+        let ports = self.list_forwarded_ports()?;
+
+        for port in ports {
+            self.stop_forward_port(&port.host_port)?;
         }
 
         Ok(())

@@ -109,15 +109,34 @@ pub struct ExecArgs {
 
 #[derive(Debug, clap::Parser)]
 pub struct PortArgs {
+    #[clap(subcommand)]
+    pub subcommand: PortSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub enum PortSubcommand {
+    Add(PortAddArgs),
+    Rm(PortRmArgs),
+    Ls(PortLsArgs),
+}
+
+#[derive(Debug, clap::Parser)]
+pub struct PortAddArgs {
     /// "8080" or "8080:1234" (host:container)
+    pub port_descriptor: String,
+}
+
+#[derive(Debug, clap::Parser)]
+pub struct PortRmArgs {
+    /// "8080" or "8080:1234" (host:container) to remove
     pub port_descriptor: Option<String>,
 
-    #[clap(long, alias = "rm")]
-    pub remove: bool,
-
     #[clap(long)]
-    pub remove_all: bool,
+    pub all: bool,
 }
+
+#[derive(Debug, clap::Parser)]
+pub struct PortLsArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct StopArgs {}
