@@ -65,7 +65,7 @@ impl DevContainer {
         })
     }
 
-    pub fn up(&self, rebuild: bool, build_no_cache: bool) -> Result<UpOutput> {
+    pub fn up(&self, rebuild: bool, build_no_cache: bool) -> Result<()> {
         let mut args = self.make_args(RootMode::No, "up");
 
         if rebuild {
@@ -76,22 +76,20 @@ impl DevContainer {
             args.push("--build-no-cache".into());
         }
 
-        let result: UpOutput = exec::capturing_stdout(&args)
-            .and_then(|output| serde_json::from_str(&output).into_diagnostic())?;
+        // Clear cache when container is rebuilt
+        if rebuild {
+            *self.cached_up_output.borrow_mut() = None;
+        }
 
-        // Cache the result
-        *self.cached_up_output.borrow_mut() = Some(result.clone());
-
-        Ok(result)
+        exec::exec(&args)
     }
 
-    pub fn inspect(&self) -> Result<UpOutput> {
+    pub fn up_and_inspect(&self) -> Result<UpOutput> {
         // Check cache first
         if let Some(cached) = self.cached_up_output.borrow().as_ref() {
             return Ok(cached.clone());
         }
 
-        // If no cache, we need to run up first
         let args = self.make_args(RootMode::No, "up");
         let result: UpOutput = exec::capturing_stdout(&args)
             .and_then(|output| serde_json::from_str(&output).into_diagnostic())?;
@@ -102,7 +100,7 @@ impl DevContainer {
     }
 
     fn get_compose_project(&self) -> Result<(String, Option<String>)> {
-        let up_output = self.inspect()?;
+        let up_output = self.up_and_inspect()?;
         let container_id = up_output.container_id;
 
         let labels = exec::capturing_stdout(&[
@@ -239,7 +237,7 @@ impl DevContainer {
             .socat_container_name(host_port)
             .wrap_err("failed to determine port-forwarding container name")?;
         let up_output = self
-            .inspect()
+            .up_and_inspect()
             .wrap_err("failed to get devcontainer status")?;
 
         #[derive(Debug, Deserialize)]
@@ -319,7 +317,7 @@ impl DevContainer {
 
     fn socat_container_name(&self, host_port: &str) -> Result<String> {
         let up_output = self
-            .inspect()
+            .up_and_inspect()
             .wrap_err("failed to get devcontainer status")?;
 
         Ok(format!(

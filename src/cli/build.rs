@@ -13,7 +13,8 @@ pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> 
     let dc = DevContainer::new(args.workspace_folder.clone())
         .wrap_err("failed to initialize devcontainer client")?;
 
-    let up_cont = devcontainer_up(&dc, build_args.rebuild, build_args.no_cache)?;
+    dc.up(build_args.rebuild, build_args.no_cache)?;
+    let up_cont = dc.up_and_inspect()?;
 
     enable_host_docker_internal_in_rancher_desktop_on_lima(&dc)?;
     enable_host_docker_internal_in_linux_dockerd(&dc)?;
@@ -107,10 +108,6 @@ fn enable_host_docker_internal_in_linux_dockerd(dc: &DevContainer) -> Result<()>
     )?;
 
     Ok(())
-}
-
-fn devcontainer_up(dc: &DevContainer, rebuild: bool, no_cache: bool) -> Result<UpOutput> {
-    dc.up(rebuild, no_cache)
 }
 
 fn install_prerequisites(dc: &DevContainer, neovim_from_source: bool) -> Result<()> {
@@ -238,7 +235,10 @@ fn install_neovim_from_source(config: &Config, dc: &DevContainer) -> Result<()> 
     let make_cmd = format!("cd /tmp/neovim && (git checkout {neovim_version} || true) && make -j4");
 
     dc.exec(&["sh", "-c", &make_cmd], RootMode::No)?;
-    dc.exec(&["sh", "-c", "cd /tmp/neovim && make install"], RootMode::Yes)?;
+    dc.exec(
+        &["sh", "-c", "cd /tmp/neovim && make install"],
+        RootMode::Yes,
+    )?;
     dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No)?;
 
     Ok(())
