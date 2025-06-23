@@ -6,6 +6,7 @@ pub mod bash;
 pub mod build;
 pub mod down;
 pub mod exec;
+pub mod init;
 pub mod neovim;
 pub mod port;
 pub mod shell;
@@ -23,6 +24,8 @@ pub struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Subcommand {
+    Init(InitArgs),
+
     Up(UpArgs),
 
     Build(BuildArgs),
@@ -49,6 +52,9 @@ pub enum Subcommand {
 pub struct Metadata {
     pub config: Config,
 }
+
+#[derive(Debug, clap::Parser)]
+pub struct InitArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct UpArgs {
