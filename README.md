@@ -77,6 +77,9 @@ dockim neovim --no-remote-ui
 # Initialize dev container template
 dockim init
 
+# Create default config file
+dockim init-config
+
 # Build container with dependencies
 dockim build
 
@@ -129,7 +132,13 @@ dockim port rm --all
 
 ## ⚙️ Configuration
 
-Dockim uses a configuration file at `~/.config/dockim/config.toml`:
+Create a default configuration file:
+
+```bash
+dockim init-config
+```
+
+This creates `~/.config/dockim/config.toml` with default settings:
 
 ```toml
 [neovim]
