@@ -5,7 +5,7 @@ use miette::{miette, Result, WrapErr};
 use crate::{
     cli::{Args, BuildArgs},
     config::Config,
-    devcontainer::{DevContainer, RootMode, UpOutput},
+    devcontainer::{DevContainer, RootMode},
     exec,
 };
 
@@ -215,30 +215,30 @@ fn install_neovim_from_binary(config: &Config, dc: &DevContainer) -> Result<()> 
 }
 
 fn install_neovim_from_source(config: &Config, dc: &DevContainer) -> Result<()> {
-    let _ = dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No);
-    dc.exec(&["mkdir", "-p", "/tmp/neovim"], RootMode::No)?;
-
-    dc.exec(
-        &[
-            "git",
-            "clone",
-            "--depth",
-            "1",
-            "--no-single-branch",
-            "https://github.com/neovim/neovim",
-            "/tmp/neovim",
-        ],
-        RootMode::No,
-    )?;
-
     let neovim_version = &config.neovim_version;
-    let make_cmd = format!("cd /tmp/neovim && (git checkout {neovim_version} || true) && make -j4");
 
-    dc.exec(&["sh", "-c", &make_cmd], RootMode::No)?;
+    // Combine all non-root commands into one shell invocation
+    let build_cmd = format!(
+        concat!(
+            "rm -rf /tmp/neovim && ",
+            "mkdir -p /tmp/neovim && ",
+            "git clone --depth 1 --no-single-branch https://github.com/neovim/neovim /tmp/neovim && ",
+            "cd /tmp/neovim && ",
+            "(git checkout {neovim_version} || true) && ",
+            "make -j4"
+        ),
+        neovim_version = neovim_version
+    );
+
+    dc.exec(&["sh", "-c", &build_cmd], RootMode::No)?;
+
+    // Install as root
     dc.exec(
         &["sh", "-c", "cd /tmp/neovim && make install"],
         RootMode::Yes,
     )?;
+
+    // Cleanup
     dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No)?;
 
     Ok(())
