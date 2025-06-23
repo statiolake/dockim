@@ -22,10 +22,10 @@ A modern CLI tool for managing Dev Containers with ease. Dockim simplifies your 
 
 ```bash
 # From source (requires Rust)
-cargo install --git https://github.com/your-repo/dockim
+cargo install --git https://github.com/statiolake/dockim
 
 # Or build locally
-git clone https://github.com/your-repo/dockim
+git clone https://github.com/statiolake/dockim
 cd dockim
 cargo install --path .
 ```
