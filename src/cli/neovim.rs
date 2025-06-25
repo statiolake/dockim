@@ -22,6 +22,8 @@ pub fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()
     let dc = DevContainer::new(args.workspace_folder.clone())
         .wrap_err("failed to initialize devcontainer client")?;
 
+    dc.up(false, false)?;
+
     // Run csrv for clipboard support if exists
     let csrv = if config.remote.use_clipboard_server {
         let csrv = Command::new("csrv")

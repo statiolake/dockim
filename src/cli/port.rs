@@ -13,6 +13,8 @@ pub fn main(_config: &Config, args: &Args, port_args: &PortArgs) -> Result<()> {
     let dc = DevContainer::new(args.workspace_folder.clone())
         .wrap_err("failed to initialize devcontainer client")?;
 
+    dc.up(false, false)?;
+
     match &port_args.subcommand {
         PortSubcommand::Add(add_args) => add_port(&dc, add_args),
         PortSubcommand::Rm(rm_args) => remove_port(&dc, rm_args),
