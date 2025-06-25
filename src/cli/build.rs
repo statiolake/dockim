@@ -6,7 +6,7 @@ use crate::{
     cli::{Args, BuildArgs},
     config::Config,
     devcontainer::{DevContainer, RootMode},
-    exec,
+    exec, log,
 };
 
 pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> {
@@ -110,8 +110,8 @@ fn enable_host_docker_internal_in_linux_dockerd(dc: &DevContainer) -> Result<()>
     Ok(())
 }
 
-fn install_prerequisites(dc: &DevContainer, neovim_from_source: bool) -> Result<()> {
-    let mut prerequisites = vec![
+fn install_prerequisites(dc: &DevContainer, _neovim_from_source: bool) -> Result<()> {
+    let prerequisites = [
         "zsh",
         "curl",
         "fzf",
@@ -122,24 +122,6 @@ fn install_prerequisites(dc: &DevContainer, neovim_from_source: bool) -> Result<
         "tzdata",
         "git-secrets",
     ];
-
-    if neovim_from_source {
-        prerequisites.extend_from_slice(&[
-            "python3-pip",
-            "python3-pynvim",
-            "ninja-build",
-            "gettext",
-            "libtool",
-            "libtool-bin",
-            "autoconf",
-            "automake",
-            "cmake",
-            "g++",
-            "pkg-config",
-            "zip",
-            "unzip",
-        ]);
-    }
 
     // Sometimes apt-get update fails without 777 permissions on /tmp
     dc.exec(
@@ -171,10 +153,23 @@ fn install_neovim(config: &Config, dc: &DevContainer, neovim_from_source: bool) 
     }
 
     if neovim_from_source {
-        install_neovim_from_source(config, dc)
-    } else {
-        install_neovim_from_binary(config, dc)
+        return install_neovim_from_source(config, dc);
     }
+
+    // Otherwise, Let's try binary installation first. However, if it fails due to glibc version
+    // incompatibility issues, we will fall back to building from source.
+    install_neovim_from_binary(config, dc)?;
+    if let Err(e) = dc.exec_capturing_stdout(&["/usr/local/bin/nvim", "--version"], RootMode::No) {
+        if !is_glibc_compatibility_error(&e) {
+            return Err(e);
+        }
+    }
+
+    log!(
+        "Retrying" ("neovim install"):
+        "Binary installation failed due to glibc compatibility, falling back to source build"
+    );
+    install_neovim_from_source(config, dc)
 }
 
 fn install_neovim_from_binary(config: &Config, dc: &DevContainer) -> Result<()> {
@@ -215,6 +210,35 @@ fn install_neovim_from_binary(config: &Config, dc: &DevContainer) -> Result<()> 
 }
 
 fn install_neovim_from_source(config: &Config, dc: &DevContainer) -> Result<()> {
+    // Install source build dependencies
+    let source_deps = vec![
+        "python3-pip",
+        "python3-pynvim",
+        "ninja-build",
+        "gettext",
+        "libtool",
+        "libtool-bin",
+        "autoconf",
+        "automake",
+        "cmake",
+        "g++",
+        "pkg-config",
+        "zip",
+        "unzip",
+    ];
+
+    dc.exec(
+        &[
+            "sh",
+            "-c",
+            &format!(
+                "apt-get update && env DEBIAN_FRONTEND=noninteractive apt-get -y install {}",
+                source_deps.join(" ")
+            ),
+        ],
+        RootMode::Yes,
+    )?;
+
     let neovim_version = &config.neovim_version;
 
     // Combine all non-root commands into one shell invocation
@@ -242,6 +266,14 @@ fn install_neovim_from_source(config: &Config, dc: &DevContainer) -> Result<()> 
     dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No)?;
 
     Ok(())
+}
+
+fn is_glibc_compatibility_error(error: &miette::Error) -> bool {
+    let error_str = error.to_string().to_lowercase();
+    error_str.contains("glibc")
+        || (error_str.contains("not found") && error_str.contains("version"))
+        || error_str.contains("symbol lookup error")
+        || error_str.contains("undefined symbol")
 }
 
 fn install_github_cli(dc: &DevContainer) -> Result<()> {
