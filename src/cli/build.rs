@@ -6,7 +6,7 @@ use crate::{
     cli::{Args, BuildArgs},
     config::Config,
     devcontainer::{DevContainer, RootMode},
-    exec, log,
+    exec,
 };
 
 pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> {
@@ -156,19 +156,23 @@ fn install_neovim(config: &Config, dc: &DevContainer, neovim_from_source: bool) 
         return install_neovim_from_source(config, dc);
     }
 
-    // Otherwise, Let's try binary installation first. However, if it fails due to glibc version
-    // incompatibility issues, we will fall back to building from source.
+    // Try binary installation first
     install_neovim_from_binary(config, dc)?;
-    if let Err(e) = dc.exec_capturing_stdout(&["/usr/local/bin/nvim", "--version"], RootMode::No) {
-        if !is_glibc_compatibility_error(&e) {
-            return Err(e);
-        }
+
+    // Test if the binary actually works
+    let Err(output) = dc.exec_capturing(&["/usr/local/bin/nvim", "--version"], RootMode::No) else {
+        return Ok(()); // Binary works fine
+    };
+
+    // Check stderr for glibc compatibility issues
+    if !is_glibc_compatibility_error_str(&output.stderr) {
+        return Err(miette::miette!(
+            "nvim binary test failed: {}",
+            output.stderr
+        ));
     }
 
-    log!(
-        "Retrying" ("neovim install"):
-        "Binary installation failed due to glibc compatibility, falling back to source build"
-    );
+    eprintln!("Warning: Binary installation failed due to glibc compatibility, falling back to source build");
     install_neovim_from_source(config, dc)
 }
 
@@ -268,12 +272,12 @@ fn install_neovim_from_source(config: &Config, dc: &DevContainer) -> Result<()> 
     Ok(())
 }
 
-fn is_glibc_compatibility_error(error: &miette::Error) -> bool {
-    let error_str = error.to_string().to_lowercase();
-    error_str.contains("glibc")
-        || (error_str.contains("not found") && error_str.contains("version"))
-        || error_str.contains("symbol lookup error")
-        || error_str.contains("undefined symbol")
+fn is_glibc_compatibility_error_str(error_str: &str) -> bool {
+    let error_lower = error_str.to_lowercase();
+    error_lower.contains("glibc")
+        || (error_lower.contains("not found") && error_lower.contains("version"))
+        || error_lower.contains("symbol lookup error")
+        || error_lower.contains("undefined symbol")
 }
 
 fn install_github_cli(dc: &DevContainer) -> Result<()> {

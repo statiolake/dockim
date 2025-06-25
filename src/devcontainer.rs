@@ -13,7 +13,7 @@ use std::{
 };
 use tempfile::{NamedTempFile, TempPath};
 
-use crate::exec;
+use crate::exec::{self, ExecOutput};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpOutput {
@@ -179,6 +179,17 @@ impl DevContainer {
         args.extend(command.iter().map(|s| s.as_ref().to_owned()));
 
         exec::capturing_stdout(&args)
+    }
+
+    pub fn exec_capturing<S: AsRef<str>>(
+        &self,
+        command: &[S],
+        root_mode: RootMode,
+    ) -> Result<ExecOutput, ExecOutput> {
+        let mut args = self.make_args(root_mode, "exec");
+        args.extend(command.iter().map(|s| s.as_ref().to_owned()));
+
+        exec::capturing(&args)
     }
 
     pub fn exec_with_stdin<S: AsRef<str>>(
