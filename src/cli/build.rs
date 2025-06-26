@@ -121,6 +121,7 @@ fn install_prerequisites(dc: &DevContainer, _neovim_from_source: bool) -> Result
         "python3",
         "tzdata",
         "git-secrets",
+        "make", // for avante.nvim
     ];
 
     // Sometimes apt-get update fails without 777 permissions on /tmp
