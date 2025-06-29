@@ -52,17 +52,13 @@ fn generate_devcontainer_json() -> &'static str {
     "service": "app",
     "workspaceFolder": "/workspace",
     "remoteUser": "vscode",
-
+    // "forwardPorts": [3000, 8080],
+    "postCreateCommand": "echo 'Container is ready!'",
     "customizations": {
         "vscode": {
-            "extensions": [
-                "ms-vscode.vscode-json"
-            ]
+            "extensions": []
         }
-    },
-    "postCreateCommand": "echo 'Container is ready!'",
-    "forwardPorts": [],
-    "portsAttributes": {}
+    }
 }
 "#
 }
@@ -73,55 +69,21 @@ fn generate_compose_yaml() -> &'static str {
     build:
       context: ..
       dockerfile: .devcontainer/Dockerfile
-
     volumes:
       - ..:/workspace:cached
-
     working_dir: /workspace
-
-    # Keep container running
     command: sleep infinity
-
-    # Add capabilities needed for development
-    cap_add:
-      - SYS_PTRACE
-    security_opt:
-      - seccomp:unconfined
-
-    # Environment variables
-    environment:
-      - DEBIAN_FRONTEND=noninteractive
 "#
 }
 
 fn generate_dockerfile() -> &'static str {
     r#"FROM ubuntu:22.04
 
-# Update package lists
-RUN apt-get update
-
-# Install additional packages here
-# RUN apt-get install -y \
-#     package1 \
-#     package2
-
-# Install development tools
-RUN apt-get install -y \
-    build-essential \
-    curl \
+RUN apt-get update && apt-get install -y \
     git \
     sudo \
-    vim \
-    zsh
+    && rm -rf /var/lib/apt/lists/*
 
-# Clean up package cache
-RUN apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Set up workspace
-RUN mkdir -p /workspace
-WORKDIR /workspace
-
-# Create non-root user
 ARG USERNAME=vscode
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
@@ -130,7 +92,8 @@ RUN groupadd --gid $USER_GID $USERNAME \
     && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
     && chmod 0440 /etc/sudoers.d/$USERNAME
 
-# Switch to non-root user
-USER vscode
+USER $USERNAME
+
+WORKDIR /workspace
 "#
 }
