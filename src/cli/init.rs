@@ -82,7 +82,12 @@ fn generate_dockerfile() -> &'static str {
 RUN apt-get update && apt-get install -y \
     git \
     sudo \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js and npm (for Claude Code)
+RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
+    && apt-get install -y nodejs
 
 ARG USERNAME=vscode
 ARG USER_UID=1000
