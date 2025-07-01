@@ -1,7 +1,7 @@
 use clap::Parser;
 use dockim::{
     cli::{
-        bash, build, down, exec as cli_exec, init, init_config, neovim, port, shell, stop, up,
+        bash, build, down, exec as cli_exec, init, init_config, init_docker, neovim, port, shell, stop, up,
         Args, Subcommand,
     },
     config::Config,
@@ -19,6 +19,9 @@ fn main() -> Result<()> {
         Subcommand::Init(init_args) => init::main(&config, &args, init_args),
         Subcommand::InitConfig(init_config_args) => {
             init_config::main(&config, &args, init_config_args)
+        }
+        Subcommand::InitDocker(init_docker_args) => {
+            init_docker::main(&config, &args, init_docker_args)
         }
         Subcommand::Up(up_args) => up::main(&config, &args, up_args),
         Subcommand::Build(build_args) => build::main(&config, &args, build_args),

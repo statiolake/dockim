@@ -8,6 +8,7 @@ pub mod down;
 pub mod exec;
 pub mod init;
 pub mod init_config;
+pub mod init_docker;
 pub mod neovim;
 pub mod port;
 pub mod shell;
@@ -29,6 +30,9 @@ pub enum Subcommand {
 
     #[clap(name = "init-config")]
     InitConfig(InitConfigArgs),
+
+    #[clap(name = "init-docker")]
+    InitDocker(InitDockerArgs),
 
     Up(UpArgs),
 
@@ -62,6 +66,9 @@ pub struct InitArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct InitConfigArgs {}
+
+#[derive(Debug, clap::Parser)]
+pub struct InitDockerArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct UpArgs {
