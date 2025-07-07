@@ -3,10 +3,10 @@ use std::{
     mem,
     process::{Command, Stdio},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use miette::{Context, Result};
+use miette::{miette, Context, Result};
 use scopeguard::defer;
 
 use crate::{
@@ -105,6 +105,8 @@ fn run_neovim_server_and_attach(
 
     // Set up port forwarding
     let guard = dc.forward_port(host_port, container_port)?;
+    // If it runs too fast, a client sometimes fails to connect to the server.
+    thread::sleep(Duration::from_millis(100));
     if config.remote.background {
         // Normally we want to remove the port forwarding when the server exits, but in the
         // background mode we want to keep it alive.
@@ -126,14 +128,30 @@ fn run_neovim_server_and_attach(
         }
     }
 
+    let mut retry_interval = 1;
     loop {
+        // If the Neovim client finishes shorter than this threshold, treat it as a failure. This
+        // occures when the socat is not ready, for example.
+        const MIN_DURATION: Duration = Duration::from_millis(500);
+
         // Connect to Neovim from the host. Try multiple times because it sometimes fails
-        let child = if config.remote.background {
+        let result = if config.remote.background {
             exec::spawn(&args).map(|_| ())
         } else {
-            exec::exec(&args)
+            let start = Instant::now();
+            let output = exec::exec(&args);
+            let elapsed = start.elapsed();
+            if elapsed < MIN_DURATION {
+                Err(miette!(
+                    "Neovim client finished too fast: {} secs",
+                    elapsed.as_secs_f64()
+                ))
+            } else {
+                output
+            }
         };
-        match child {
+
+        match result {
             Ok(_) => break,
             Err(e) => {
                 let is_server_finished = nvim.borrow_mut().try_wait().map_or(true, |s| s.is_some());
@@ -145,9 +163,11 @@ fn run_neovim_server_and_attach(
 
                 log!(
                     "Waiting":
-                    "Connection to Neovim failed: {e}; try reconnecting in a few seconds"
+                    "Connection to Neovim failed: {e}; try reconnecting in a {retry_interval} seconds"
                 );
-                thread::sleep(Duration::from_secs(5));
+                thread::sleep(Duration::from_secs(retry_interval));
+                retry_interval *= 2;
+                retry_interval = retry_interval.max(10);
             }
         }
     }

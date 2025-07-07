@@ -11,7 +11,7 @@ use crate::log;
 pub fn spawn<S: AsRef<str> + Debug>(args: &[S]) -> Result<Child> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
-    log!("Running": "{args:?}");
+    log!("Spawning": "{args:?}");
 
     let command = args[0].as_ref();
     let args = &args[1..];
