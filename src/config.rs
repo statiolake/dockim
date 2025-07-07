@@ -25,11 +25,14 @@ pub struct Config {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct RemoteConfig {
-    #[serde(default = "default_remote_args_windows")]
+    #[serde(default = "default_remote_args_windows", skip_serializing)]
     pub args_windows: Vec<String>,
 
-    #[serde(default = "default_remote_args_unix")]
+    #[serde(default = "default_remote_args_unix", skip_serializing)]
     pub args_unix: Vec<String>,
+
+    #[serde(default = "default_remote_args")]
+    pub args: Vec<String>,
 
     #[serde(default = "default_remote_background")]
     pub background: bool,
@@ -55,6 +58,7 @@ impl Default for RemoteConfig {
         RemoteConfig {
             args_windows: default_remote_args_windows(),
             args_unix: default_remote_args_unix(),
+            args: default_remote_args(),
             background: default_remote_background(),
             use_clipboard_server: default_remote_use_clipboard_server(),
         }
@@ -101,6 +105,27 @@ fn default_remote_background() -> bool {
 
 fn default_remote_use_clipboard_server() -> bool {
     true
+}
+
+fn default_remote_args() -> Vec<String> {
+    default_remote_args_unix()
+}
+
+impl RemoteConfig {
+    pub fn get_args(&self) -> Vec<String> {
+        if !self.args.is_empty() {
+            self.args.clone()
+        } else if !self.args_windows.is_empty() || !self.args_unix.is_empty() {
+            eprintln!("Warning: args_windows and args_unix are deprecated. Please use 'args' field instead.");
+            if cfg!(windows) {
+                self.args_windows.clone()
+            } else {
+                self.args_unix.clone()
+            }
+        } else {
+            default_remote_args()
+        }
+    }
 }
 
 impl Config {

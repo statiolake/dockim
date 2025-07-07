@@ -250,13 +250,9 @@ background = false
 # Enable clipboard synchronization between host and container
 use_clipboard_server = true
 
-# Command to run Neovim client on Windows/WSL
+# Command to run Neovim client
 # {server} is replaced with "localhost:PORT"
-args_windows = ["nvim", "--server", "{server}", "--remote-ui"]
-
-# Command to run Neovim client on Unix systems
-# {server} is replaced with "localhost:PORT"  
-args_unix = ["nvim", "--server", "{server}", "--remote-ui"]
+args = ["nvim", "--server", "{server}", "--remote-ui"]
 ```
 
 The `{server}` placeholder gets replaced with the actual server address (e.g., `localhost:52341`) when launching the remote client.

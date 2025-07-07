@@ -115,13 +115,7 @@ fn run_neovim_server_and_attach(
 
     // Prepare execution arguments
     let server = format!("localhost:{}", host_port);
-    let is_windows = cfg!(windows);
-    let is_wsl = exec::capturing_stdout(&["uname", "-r"]).is_ok_and(|s| s.contains("Microsoft"));
-    let mut args = if is_windows || is_wsl {
-        config.remote.args_windows.clone()
-    } else {
-        config.remote.args_unix.clone()
-    };
+    let mut args = config.remote.get_args();
     for arg in &mut args {
         if arg == SERVER_PLACEHOLDER {
             *arg = server.clone();
