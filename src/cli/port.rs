@@ -10,7 +10,8 @@ use crate::{
 };
 
 pub fn main(_config: &Config, args: &Args, port_args: &PortArgs) -> Result<()> {
-    let dc = DevContainer::new(args.workspace_folder.clone())
+    let config_path = args.resolve_config_path();
+    let dc = DevContainer::new(args.workspace_folder.clone(), Some(config_path))
         .wrap_err("failed to initialize devcontainer client")?;
 
     dc.up(false, false)?;

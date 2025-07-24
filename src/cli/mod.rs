@@ -22,6 +22,53 @@ pub struct Args {
 
     #[clap(short = 'w', long)]
     pub workspace_folder: Option<PathBuf>,
+
+    #[clap(short = 'c', long)]
+    pub config: Option<String>,
+}
+
+impl Args {
+    pub fn resolve_config_path(&self) -> String {
+        match &self.config {
+            None => ".devcontainer/devcontainer.json".to_string(),
+            Some(config_arg) => {
+                if config_arg.contains('/') {
+                    config_arg.clone()
+                } else {
+                    format!(".devcontainer/{config_arg}/devcontainer.json")
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_config_path() {
+        let args = Args {
+            subcommand: Subcommand::Up(UpArgs { rebuild: false, build_no_cache: false }),
+            workspace_folder: None,
+            config: None,
+        };
+        assert_eq!(args.resolve_config_path(), ".devcontainer/devcontainer.json");
+
+        let args = Args {
+            subcommand: Subcommand::Up(UpArgs { rebuild: false, build_no_cache: false }),
+            workspace_folder: None,
+            config: Some("develop".to_string()),
+        };
+        assert_eq!(args.resolve_config_path(), ".devcontainer/develop/devcontainer.json");
+
+        let args = Args {
+            subcommand: Subcommand::Up(UpArgs { rebuild: false, build_no_cache: false }),
+            workspace_folder: None,
+            config: Some("custom/path/devcontainer.json".to_string()),
+        };
+        assert_eq!(args.resolve_config_path(), "custom/path/devcontainer.json");
+    }
 }
 
 #[derive(Debug, clap::Subcommand)]

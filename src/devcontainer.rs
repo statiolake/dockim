@@ -38,6 +38,7 @@ pub struct ForwardedPort {
 #[derive(Debug)]
 pub struct DevContainer {
     workspace_folder: PathBuf,
+    config_path: Option<String>,
     overriden_config_paths: OverridenConfigPaths,
     cached_up_output: RefCell<Option<UpOutput>>,
 }
@@ -59,15 +60,13 @@ impl DevContainer {
         exec::exec(&[&*Self::devcontainer_command(), "--version"]).is_ok()
     }
 
-    pub fn new(workspace_folder: Option<PathBuf>) -> Result<Self> {
-        let overriden_config = generate_overriden_config_paths(
-            workspace_folder
-                .as_deref()
-                .unwrap_or_else(|| Path::new(".")),
-        )?;
+    pub fn new(workspace_folder: Option<PathBuf>, config_path: Option<String>) -> Result<Self> {
+        let workspace_folder = workspace_folder.unwrap_or_else(|| PathBuf::from("."));
+        let overriden_config = generate_overriden_config_paths(&workspace_folder)?;
 
         Ok(DevContainer {
-            workspace_folder: workspace_folder.unwrap_or_else(|| PathBuf::from(".")),
+            workspace_folder,
+            config_path,
             overriden_config_paths: overriden_config,
             cached_up_output: RefCell::new(None),
         })
@@ -413,7 +412,10 @@ impl DevContainer {
             workspace_folder,
         ];
 
-        if root_mode.is_required() {
+        if let Some(config_path) = &self.config_path {
+            args.push("--config".to_owned());
+            args.push(config_path.clone());
+        } else if root_mode.is_required() {
             args.push("--override-config".to_owned());
             args.push(
                 self.overriden_config_paths
