@@ -13,6 +13,9 @@ pub struct Config {
     #[serde(default = "default_neovim_version")]
     pub neovim_version: String,
 
+    #[serde(default = "default_neovim_binary_repository")]
+    pub neovim_binary_repository: String,
+
     #[serde(default = "default_dotfiles_repository_name")]
     pub dotfiles_repository_name: String,
 
@@ -46,6 +49,7 @@ impl Default for Config {
         Config {
             shell: default_shell(),
             neovim_version: default_neovim_version(),
+            neovim_binary_repository: default_neovim_binary_repository(),
             dotfiles_repository_name: default_dotfiles_repository_name(),
             dotfiles_install_command: default_dotfiles_install_command(),
             remote: RemoteConfig::default(),
@@ -71,6 +75,10 @@ fn default_shell() -> String {
 
 fn default_neovim_version() -> String {
     "v0.11.0".to_string()
+}
+
+fn default_neovim_binary_repository() -> String {
+    "https://github.com/neovim/neovim".to_string()
 }
 
 fn default_dotfiles_repository_name() -> String {

@@ -1,4 +1,4 @@
-FROM rust:1.70
+FROM rust:1.88
 
 RUN apt-get update && apt-get install -y \
     git \

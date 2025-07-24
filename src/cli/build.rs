@@ -190,8 +190,8 @@ fn install_neovim_from_binary(config: &Config, dc: &DevContainer) -> Result<()> 
     };
 
     let download_url = format!(
-        "https://github.com/neovim/neovim/releases/download/{}/nvim-linux-{}.tar.gz",
-        config.neovim_version, arch
+        "{}/releases/download/{}/nvim-linux-{}.tar.gz",
+        config.neovim_binary_repository, config.neovim_version, arch
     );
 
     dc.exec(
