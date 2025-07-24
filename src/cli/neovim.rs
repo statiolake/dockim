@@ -161,7 +161,7 @@ fn run_neovim_server_and_attach(
                 );
                 thread::sleep(Duration::from_secs(retry_interval));
                 retry_interval *= 2;
-                retry_interval = retry_interval.max(10);
+                retry_interval = retry_interval.min(10);
             }
         }
     }
