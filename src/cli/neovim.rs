@@ -67,7 +67,7 @@ pub fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()
             )
         } else {
             let auto_host_port = dc.find_available_host_port()?;
-            println!("Auto-selected host port: {}", auto_host_port);
+            println!("Auto-selected host port: {auto_host_port}");
             (auto_host_port.to_string(), "54321".to_string())
         };
 
@@ -96,7 +96,7 @@ fn run_neovim_server_and_attach(
     container_port: &str,
 ) -> Result<()> {
     // Start Neovim server in the container
-    let listen = format!("0.0.0.0:{}", container_port);
+    let listen = format!("0.0.0.0:{container_port}");
     let nvim = RefCell::new(dc.spawn(&["nvim", "--headless", "--listen", &listen], RootMode::No)?);
     defer! {
         let _ = nvim.borrow_mut().kill();
@@ -114,7 +114,7 @@ fn run_neovim_server_and_attach(
     }
 
     // Prepare execution arguments
-    let server = format!("localhost:{}", host_port);
+    let server = format!("localhost:{host_port}");
     let mut args = config.remote.get_args();
     for arg in &mut args {
         if arg == SERVER_PLACEHOLDER {

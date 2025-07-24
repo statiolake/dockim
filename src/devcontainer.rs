@@ -228,8 +228,7 @@ impl DevContainer {
 
         // Combine mkdir and cat into a single command
         let combined_cmd = format!(
-            "mkdir -p $(dirname {}) && cat > {}",
-            dst_container, dst_container
+            "mkdir -p $(dirname {dst_container}) && cat > {dst_container}"
         );
         self.exec_with_stdin(
             &["sh", "-c", &combined_cmd],
@@ -274,7 +273,7 @@ impl DevContainer {
             .next()
             .ok_or_else(|| miette!("failed to get container network"))?;
 
-        let docker_publish_port = format!("{}:1234", host_port);
+        let docker_publish_port = format!("{host_port}:1234");
         let socat_target = format!(
             "TCP-CONNECT:{}:{}",
             container_network.ip_address, container_port
@@ -333,7 +332,7 @@ impl DevContainer {
             };
 
             // Extract host port from container name: dockim-{container_id}-socat-{host_port}
-            let Some(host_port) = name.split('-').last() else {
+            let Some(host_port) = name.split('-').next_back() else {
                 continue;
             };
 

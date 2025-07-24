@@ -144,7 +144,7 @@ pub fn capturing<S: AsRef<str> + Debug>(args: &[S]) -> Result<ExecOutput, ExecOu
         Err(e) => {
             return Err(ExecOutput {
                 stdout: String::new(),
-                stderr: format!("exec failed: {}", e),
+                stderr: format!("exec failed: {e}"),
             });
         }
     };

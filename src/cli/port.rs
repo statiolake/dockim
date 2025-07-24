@@ -28,7 +28,7 @@ fn add_port(dc: &DevContainer, add_args: &PortAddArgs) -> Result<()> {
     // We need to forget because forward_port() returns a guard that will stop forwarding on drop
     mem::forget(dc.forward_port(host_port, container_port)?);
 
-    println!("Port forwarding started: {}:{}", host_port, container_port);
+    println!("Port forwarding started: {host_port}:{container_port}");
     Ok(())
 }
 
@@ -39,7 +39,7 @@ fn remove_port(dc: &DevContainer, rm_args: &PortRmArgs) -> Result<()> {
     } else if let Some(port_descriptor) = &rm_args.port_descriptor {
         let (host_port, _) = parse_port_descriptor(port_descriptor)?;
         dc.stop_forward_port(host_port)?;
-        println!("Port forwarding stopped: {}", host_port);
+        println!("Port forwarding stopped: {host_port}");
     } else {
         bail!("Must specify either a port descriptor or --all flag");
     }

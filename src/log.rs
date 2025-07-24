@@ -17,5 +17,5 @@ pub fn log<D: Display>(kind: &str, note: Option<&str>, msg: D) {
     if let Some(note) = note {
         eprint!("{}", format!(" ({note})").bright_black());
     }
-    eprintln!(" {}", msg);
+    eprintln!(" {msg}");
 }
