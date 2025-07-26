@@ -38,7 +38,7 @@ pub struct ForwardedPort {
 #[derive(Debug)]
 pub struct DevContainer {
     workspace_folder: PathBuf,
-    config_path: Option<String>,
+    config_path: PathBuf,
     overriden_config_paths: OverridenConfigPaths,
     cached_up_output: RefCell<Option<UpOutput>>,
 }
@@ -60,9 +60,8 @@ impl DevContainer {
         exec::exec(&[&*Self::devcontainer_command(), "--version"]).is_ok()
     }
 
-    pub fn new(workspace_folder: Option<PathBuf>, config_path: Option<String>) -> Result<Self> {
-        let workspace_folder = workspace_folder.unwrap_or_else(|| PathBuf::from("."));
-        let overriden_config = generate_overriden_config_paths(&workspace_folder)?;
+    pub fn new(workspace_folder: PathBuf, config_path: PathBuf) -> Result<Self> {
+        let overriden_config = generate_overriden_config_paths(&config_path)?;
 
         Ok(DevContainer {
             workspace_folder,
@@ -157,14 +156,14 @@ impl DevContainer {
 
     pub fn spawn<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<Child> {
         let mut args = self.make_args(root_mode, "exec");
-        args.extend(command.iter().map(|s| s.as_ref().to_owned()));
+        args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         exec::spawn(&args)
     }
 
     pub fn exec<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<()> {
         let mut args = self.make_args(root_mode, "exec");
-        args.extend(command.iter().map(|s| s.as_ref().to_owned()));
+        args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         exec::exec(&args)
     }
@@ -175,7 +174,7 @@ impl DevContainer {
         root_mode: RootMode,
     ) -> Result<String> {
         let mut args = self.make_args(root_mode, "exec");
-        args.extend(command.iter().map(|s| s.as_ref().to_owned()));
+        args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         exec::capturing_stdout(&args)
     }
@@ -186,7 +185,7 @@ impl DevContainer {
         root_mode: RootMode,
     ) -> Result<ExecOutput, ExecOutput> {
         let mut args = self.make_args(root_mode, "exec");
-        args.extend(command.iter().map(|s| s.as_ref().to_owned()));
+        args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         exec::capturing(&args)
     }
@@ -198,7 +197,7 @@ impl DevContainer {
         root_mode: RootMode,
     ) -> Result<()> {
         let mut args = self.make_args(root_mode, "exec");
-        args.extend(command.iter().map(|s| s.as_ref().to_owned()));
+        args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         exec::with_stdin(&args, stdin)
     }
@@ -210,7 +209,7 @@ impl DevContainer {
         root_mode: RootMode,
     ) -> Result<()> {
         let mut args = self.make_args(root_mode, "exec");
-        args.extend(command.iter().map(|s| s.as_ref().to_owned()));
+        args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         exec::with_bytes_stdin(&args, stdin)
     }
@@ -226,9 +225,7 @@ impl DevContainer {
             .wrap_err_with(|| miette!("failed to open {}", src_host.display()))?;
 
         // Combine mkdir and cat into a single command
-        let combined_cmd = format!(
-            "mkdir -p $(dirname {dst_container}) && cat > {dst_container}"
-        );
+        let combined_cmd = format!("mkdir -p $(dirname {dst_container}) && cat > {dst_container}");
         self.exec_with_stdin(
             &["sh", "-c", &combined_cmd],
             Stdio::from(src_host_file),
@@ -404,19 +401,17 @@ impl DevContainer {
     }
 
     fn make_args(&self, root_mode: RootMode, subcommand: &str) -> Vec<String> {
-        let workspace_folder = self.workspace_folder.to_string_lossy().to_string();
         let mut args = vec![
             Self::devcontainer_command(),
-            subcommand.to_owned(),
-            "--workspace-folder".to_owned(),
-            workspace_folder,
+            subcommand.to_string(),
+            "--workspace-folder".to_string(),
+            self.workspace_folder.to_string_lossy().to_string(),
+            "--config".to_string(),
+            self.config_path.to_string_lossy().to_string(),
         ];
 
-        if let Some(config_path) = &self.config_path {
-            args.push("--config".to_owned());
-            args.push(config_path.clone());
-        } else if root_mode.is_required() {
-            args.push("--override-config".to_owned());
+        if root_mode.is_required() {
+            args.push("--override-config".to_string());
             args.push(
                 self.overriden_config_paths
                     .root_devcontainer_json
@@ -424,7 +419,7 @@ impl DevContainer {
                     .to_string(),
             );
         } else {
-            args.push("--override-config".to_owned());
+            args.push("--override-config".to_string());
             args.push(
                 self.overriden_config_paths
                     .devcontainer_json
@@ -438,9 +433,9 @@ impl DevContainer {
 
     fn devcontainer_command() -> String {
         if cfg!(target_os = "windows") {
-            "devcontainer.cmd".to_owned()
+            "devcontainer.cmd".to_string()
         } else {
-            "devcontainer".to_owned()
+            "devcontainer".to_string()
         }
     }
 }
@@ -458,17 +453,17 @@ struct OverridenConfigPaths {
 /// Generate override config file contents to achieve various useful features:
 /// - Root user execution in container without sudo installation
 /// - host.docker.internal on Linux
-fn generate_overriden_config_paths(workspace_folder: &Path) -> Result<OverridenConfigPaths> {
+fn generate_overriden_config_paths(config_path: &Path) -> Result<OverridenConfigPaths> {
     // devcontainer.json
-    let compose_yaml = generate_overriden_compose_yaml(workspace_folder)
+    let compose_yaml = generate_overriden_compose_yaml(config_path)
         .wrap_err("failed to generate temporary docker-compose overrides")?
         .map(|f| f.into_temp_path());
     let devcontainer_json =
-        generate_overriden_devcontainer_json(workspace_folder, compose_yaml.as_ref())
+        generate_overriden_devcontainer_json(config_path, compose_yaml.as_ref())
             .wrap_err("failed to generate temporary devcontainer overrides")?
             .into_temp_path();
     let root_devcontainer_json =
-        generate_overriden_root_devcontainer_json(workspace_folder, compose_yaml.as_ref())
+        generate_overriden_root_devcontainer_json(config_path, compose_yaml.as_ref())
             .wrap_err("failed to generate temporary devcontainer overrides")?
             .into_temp_path();
 
@@ -479,12 +474,9 @@ fn generate_overriden_config_paths(workspace_folder: &Path) -> Result<OverridenC
     })
 }
 
-fn load_devcontainer_json(workspace_folder: &Path) -> Result<Value> {
-    let path = workspace_folder
-        .join(".devcontainer")
-        .join("devcontainer.json");
+fn load_devcontainer_json(path: &Path) -> Result<Value> {
     let value: Value = serde_hjson::from_str(
-        &fs::read_to_string(&path)
+        &fs::read_to_string(path)
             .into_diagnostic()
             .wrap_err("failed to read devcontainer.json")?,
     )
@@ -526,11 +518,11 @@ fn update_compose_files(value: &mut Value, compose_yaml: Option<&TempPath>) {
 }
 
 fn generate_overriden_devcontainer_json(
-    workspace_folder: &Path,
+    config_path: &Path,
     compose_yaml: Option<&TempPath>,
 ) -> Result<NamedTempFile> {
     let mut value =
-        load_devcontainer_json(workspace_folder).wrap_err("failed to load devcontainer.json")?;
+        load_devcontainer_json(config_path).wrap_err("failed to load devcontainer.json")?;
 
     update_host_docker_internal_devcontainer_json_value(&mut value);
     update_compose_files(&mut value, compose_yaml);
@@ -552,11 +544,11 @@ fn generate_overriden_devcontainer_json(
 }
 
 fn generate_overriden_root_devcontainer_json(
-    workspace_folder: &Path,
+    config_path: &Path,
     compose_yaml: Option<&TempPath>,
 ) -> Result<NamedTempFile> {
     let mut value =
-        load_devcontainer_json(workspace_folder).wrap_err("failed to load devcontainer.json")?;
+        load_devcontainer_json(config_path).wrap_err("failed to load devcontainer.json")?;
 
     update_host_docker_internal_devcontainer_json_value(&mut value);
     update_root_devcontainer_json_value(&mut value);
@@ -578,9 +570,9 @@ fn generate_overriden_root_devcontainer_json(
     Ok(overriden_file)
 }
 
-fn generate_overriden_compose_yaml(workspace_folder: &Path) -> Result<Option<NamedTempFile>> {
+fn generate_overriden_compose_yaml(config_path: &Path) -> Result<Option<NamedTempFile>> {
     let devcontainer_json_value =
-        load_devcontainer_json(workspace_folder).wrap_err("failed to load devcontainer.json")?;
+        load_devcontainer_json(config_path).wrap_err("failed to load devcontainer.json")?;
 
     let Some(docker_compose_paths) = devcontainer_json_value["dockerComposeFile"]
         .as_array()

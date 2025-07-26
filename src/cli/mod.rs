@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{PathBuf, MAIN_SEPARATOR};
 
 use crate::config::Config;
 
@@ -28,14 +28,23 @@ pub struct Args {
 }
 
 impl Args {
-    pub fn resolve_config_path(&self) -> String {
+    pub fn resolve_workspace_folder(&self) -> PathBuf {
+        match &self.workspace_folder {
+            None => PathBuf::from("."),
+            Some(folder) => folder.clone(),
+        }
+    }
+
+    pub fn resolve_config_path(&self) -> PathBuf {
         match &self.config {
-            None => ".devcontainer/devcontainer.json".to_string(),
+            None => PathBuf::from(".devcontainer/devcontainer.json"),
             Some(config_arg) => {
-                if config_arg.contains('/') {
-                    config_arg.clone()
+                if config_arg.contains('/') || config_arg.contains(MAIN_SEPARATOR) {
+                    PathBuf::from(config_arg)
                 } else {
-                    format!(".devcontainer/{config_arg}/devcontainer.json")
+                    PathBuf::from(".devcontainer")
+                        .join(config_arg)
+                        .join("devcontainer.json")
                 }
             }
         }
@@ -44,30 +53,50 @@ impl Args {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     #[test]
     fn test_resolve_config_path() {
         let args = Args {
-            subcommand: Subcommand::Up(UpArgs { rebuild: false, build_no_cache: false }),
+            subcommand: Subcommand::Up(UpArgs {
+                rebuild: false,
+                build_no_cache: false,
+            }),
             workspace_folder: None,
             config: None,
         };
-        assert_eq!(args.resolve_config_path(), ".devcontainer/devcontainer.json");
+        assert_eq!(
+            args.resolve_config_path().components(),
+            Path::new(".devcontainer/devcontainer.json").components()
+        );
 
         let args = Args {
-            subcommand: Subcommand::Up(UpArgs { rebuild: false, build_no_cache: false }),
+            subcommand: Subcommand::Up(UpArgs {
+                rebuild: false,
+                build_no_cache: false,
+            }),
             workspace_folder: None,
             config: Some("develop".to_string()),
         };
-        assert_eq!(args.resolve_config_path(), ".devcontainer/develop/devcontainer.json");
+        assert_eq!(
+            args.resolve_config_path().components(),
+            Path::new(".devcontainer/develop/devcontainer.json").components()
+        );
 
         let args = Args {
-            subcommand: Subcommand::Up(UpArgs { rebuild: false, build_no_cache: false }),
+            subcommand: Subcommand::Up(UpArgs {
+                rebuild: false,
+                build_no_cache: false,
+            }),
             workspace_folder: None,
             config: Some("custom/path/devcontainer.json".to_string()),
         };
-        assert_eq!(args.resolve_config_path(), "custom/path/devcontainer.json");
+        assert_eq!(
+            args.resolve_config_path().components(),
+            Path::new("custom/path/devcontainer.json").components()
+        );
     }
 }
 
