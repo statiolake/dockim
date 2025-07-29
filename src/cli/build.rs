@@ -282,8 +282,65 @@ fn is_glibc_compatibility_error_str(error_str: &str) -> bool {
 }
 
 fn install_github_cli(dc: &DevContainer) -> Result<()> {
+    // Check if gh is already installed
+    if dc
+        .exec_capturing_stdout(&["~/.local/bin/gh", "--version"], RootMode::No)
+        .is_ok()
+    {
+        return Ok(());
+    }
+
+    let arch = dc
+        .exec_capturing_stdout(&["uname", "-m"], RootMode::No)
+        .wrap_err("failed to determine system architecture")?
+        .trim()
+        .to_string();
+    let arch = match arch.as_str() {
+        "x86_64" => "amd64",
+        "aarch64" | "arm64" => "arm64",
+        _ => return Err(miette!("Unsupported architecture: {}", arch)),
+    };
+
+    // Get the latest release version from GitHub API on host machine
+    let api_response = exec::capturing_stdout(&[
+        "curl", "-s", "https://api.github.com/repos/cli/cli/releases/latest"
+    ])
+    .wrap_err("failed to get latest gh CLI version from GitHub API")?;
+    
+    let api_json: serde_json::Value = serde_json::from_str(&api_response)
+        .wrap_err("failed to parse GitHub API response")?;
+    
+    let latest_version = api_json["tag_name"]
+        .as_str()
+        .ok_or_else(|| miette!("tag_name not found in GitHub API response"))?
+        .to_string();
+
+    let download_url = format!(
+        "https://github.com/cli/cli/releases/download/{}/gh_{}_linux_{}.tar.gz",
+        latest_version,
+        latest_version.trim_start_matches('v'),
+        arch
+    );
+
     dc.exec(
-        &["sh", "-c", "curl -sS https://webi.sh/gh | sh"],
+        &[
+            "sh",
+            "-c",
+            &format!(
+                concat!(
+                    "mkdir -p ~/.local/bin && ",
+                    "rm -f /tmp/gh.tar.gz && ",
+                    "curl -L -o /tmp/gh.tar.gz {download_url} && ",
+                    "tar -C /tmp -xzf /tmp/gh.tar.gz && ",
+                    "cp /tmp/gh_{version}_linux_{arch}/bin/gh ~/.local/bin/gh && ",
+                    "chmod +x ~/.local/bin/gh && ",
+                    "rm -rf /tmp/gh.tar.gz /tmp/gh_{version}_linux_{arch}"
+                ),
+                download_url = download_url,
+                version = latest_version.trim_start_matches('v'),
+                arch = arch
+            ),
+        ],
         RootMode::No,
     )
 }
