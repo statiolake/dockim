@@ -1,6 +1,6 @@
 use dirs::home_dir;
 use itertools::Itertools;
-use miette::{miette, Result, WrapErr};
+use miette::{miette, IntoDiagnostic, Result, WrapErr};
 
 use crate::{
     cli::{Args, BuildArgs},
@@ -303,13 +303,16 @@ fn install_github_cli(dc: &DevContainer) -> Result<()> {
 
     // Get the latest release version from GitHub API on host machine
     let api_response = exec::capturing_stdout(&[
-        "curl", "-s", "https://api.github.com/repos/cli/cli/releases/latest"
+        "curl",
+        "-s",
+        "https://api.github.com/repos/cli/cli/releases/latest",
     ])
     .wrap_err("failed to get latest gh CLI version from GitHub API")?;
-    
+
     let api_json: serde_json::Value = serde_json::from_str(&api_response)
+        .into_diagnostic()
         .wrap_err("failed to parse GitHub API response")?;
-    
+
     let latest_version = api_json["tag_name"]
         .as_str()
         .ok_or_else(|| miette!("tag_name not found in GitHub API response"))?
