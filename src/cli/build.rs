@@ -1,5 +1,4 @@
 use dirs::home_dir;
-use itertools::Itertools;
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
 
 use crate::{
@@ -16,8 +15,6 @@ pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> 
     dc.up(build_args.rebuild, build_args.no_cache)?;
     let up_cont = dc.up_and_inspect()?;
 
-    enable_host_docker_internal_in_rancher_desktop_on_lima(&dc)?;
-    enable_host_docker_internal_in_linux_dockerd(&dc)?;
     install_prerequisites(&dc, build_args.neovim_from_source)?;
     install_neovim(config, &dc, build_args.neovim_from_source)?;
     install_github_cli(&dc)?;
@@ -26,86 +23,6 @@ pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> 
 
     prepare_opt_dir(&dc, &up_cont.remote_user)?;
     install_dotfiles(config, &dc)?;
-
-    Ok(())
-}
-
-fn enable_host_docker_internal_in_rancher_desktop_on_lima(dc: &DevContainer) -> Result<()> {
-    if exec::exec(&["rdctl", "version"]).is_err() {
-        // Not using Rancher Desktop, skipping
-        return Ok(());
-    }
-
-    let host_ip_addr = {
-        let vm_hosts = exec::capturing_stdout(&["rdctl", "shell", "cat", "/etc/hosts"])
-            .wrap_err("failed to read /etc/hosts on Rancher Desktop VM")?;
-        let Some(ip_addr) = vm_hosts.lines().find_map(|line| {
-            let parts = line.split_whitespace().collect_vec();
-            if parts.len() >= 2 && parts[1] == "host.lima.internal" {
-                Some(parts[0].to_string())
-            } else {
-                None
-            }
-        }) else {
-            // host.lima.internal not found in /etc/hosts, skipping
-            return Ok(());
-        };
-
-        ip_addr
-    };
-
-    // 既存の host.docker.internal エントリを削除し、新しいエントリを追加
-    dc.exec(
-        &[
-            "sh",
-            "-c",
-            &format!(
-                concat!(
-                    "grep -v 'host.docker.internal' /etc/hosts > /tmp/hosts.tmp && ",
-                    "echo '{host_ip_addr} host.docker.internal' >> /tmp/hosts.tmp && ",
-                    "cp /tmp/hosts.tmp /etc/hosts && ",
-                    "rm /tmp/hosts.tmp"
-                ),
-                host_ip_addr = host_ip_addr
-            ),
-        ],
-        RootMode::Yes,
-    )?;
-
-    Ok(())
-}
-
-fn enable_host_docker_internal_in_linux_dockerd(dc: &DevContainer) -> Result<()> {
-    // Check if we're running on Linux
-    if !cfg!(target_os = "linux") {
-        return Ok(());
-    }
-
-    let container_hosts = dc
-        .exec_capturing_stdout(&["cat", "/etc/hosts"], RootMode::No)
-        .wrap_err("failed to read /etc/hosts")?;
-
-    if container_hosts.contains("host.docker.internal") {
-        // host.docker.internal already exists in /etc/hosts, skipping
-        return Ok(());
-    }
-
-    let host_ip_addr = dc
-        .exec_capturing_stdout(
-            &["sh", "-c", "ip route | grep default | cut -d' ' -f3"],
-            RootMode::No,
-        )
-        .map(|ip| ip.trim().to_string())
-        .unwrap_or_else(|_| "172.17.0.1".to_string()); // デフォルト値にフォールバック
-
-    dc.exec(
-        &[
-            "sh",
-            "-c",
-            &format!("echo '{host_ip_addr} host.docker.internal' | tee -a /etc/hosts",),
-        ],
-        RootMode::Yes,
-    )?;
 
     Ok(())
 }
