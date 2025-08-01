@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use miette::{miette, Context, Result};
+use miette::{miette, Context, IntoDiagnostic, Result};
 use scopeguard::defer;
 
 use crate::{
@@ -105,8 +105,6 @@ fn run_neovim_server_and_attach(
 
     // Set up port forwarding
     let guard = dc.forward_port(host_port, container_port)?;
-    // If it runs too fast, a client sometimes fails to connect to the server.
-    thread::sleep(Duration::from_millis(100));
     if config.remote.background {
         // Normally we want to remove the port forwarding when the server exits, but in the
         // background mode we want to keep it alive.
@@ -130,7 +128,16 @@ fn run_neovim_server_and_attach(
 
         // Connect to Neovim from the host. Try multiple times because it sometimes fails
         let result = if config.remote.background {
-            exec::spawn(&args).map(|_| ())
+            let mut child = exec::spawn(&args)?;
+            // wait for minimum duration and check if the child process is still running
+            thread::sleep(MIN_DURATION);
+            child
+                .try_wait()
+                .into_diagnostic()
+                .and_then(|status| match status {
+                    Some(_) => Err(miette!("Neovim client finished too fast in background")),
+                    None => Ok(()),
+                })
         } else {
             let start = Instant::now();
             let output = exec::exec(&args);
