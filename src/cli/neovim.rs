@@ -97,7 +97,26 @@ fn run_neovim_server_and_attach(
 ) -> Result<()> {
     // Start Neovim server in the container
     let listen = format!("0.0.0.0:{container_port}");
-    let nvim = RefCell::new(dc.spawn(&["nvim", "--headless", "--listen", &listen], RootMode::No)?);
+    let env = if cfg!(target_os = "macos") {
+        "DOCKIM_ON_MACOS"
+    } else if cfg!(target_os = "windows")
+        || exec::capturing_stdout(&["uname", "-a"]).is_ok_and(|s| s.contains("Microsoft"))
+    {
+        "DOCKIM_ON_WIN32"
+    } else {
+        "DOCKIM_ON_LINUX"
+    };
+    let nvim = RefCell::new(dc.spawn(
+        &[
+            "/usr/bin/env",
+            &format!("{env}=1"),
+            "nvim",
+            "--headless",
+            "--listen",
+            &listen,
+        ],
+        RootMode::No,
+    )?);
     defer! {
         let _ = nvim.borrow_mut().kill();
         let _ = nvim.borrow_mut().wait();
