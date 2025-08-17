@@ -17,6 +17,8 @@ use crate::{
 };
 
 pub const SERVER_PLACEHOLDER: &str = "{server}";
+pub const CONTAINER_ID_PLACEHOLDER: &str = "{container_id}";
+pub const WORKSPACE_FOLDER_PLACEHOLDER: &str = "{workspace_folder}";
 
 pub fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
     let dc = DevContainer::new(args.resolve_workspace_folder(), args.resolve_config_path())
@@ -132,11 +134,13 @@ fn run_neovim_server_and_attach(
 
     // Prepare execution arguments
     let server = format!("localhost:{host_port}");
+    let up_output = dc.up_and_inspect()?;
     let mut args = config.remote.get_args();
     for arg in &mut args {
-        if arg == SERVER_PLACEHOLDER {
-            *arg = server.clone();
-        }
+        *arg = arg
+            .replace(SERVER_PLACEHOLDER, &server)
+            .replace(CONTAINER_ID_PLACEHOLDER, &up_output.container_id)
+            .replace(WORKSPACE_FOLDER_PLACEHOLDER, &up_output.remote_workspace_folder);
     }
 
     let mut retry_interval = 1;
