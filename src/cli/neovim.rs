@@ -1,14 +1,19 @@
 use std::{
-    cell::RefCell,
     mem,
-    process::{Child, Command, Stdio},
+    process::Stdio,
+    rc::Rc,
     time::{Duration, Instant},
 };
 
-use tokio::{select, signal, task, time as tokio_time};
-
-use miette::{miette, Context, IntoDiagnostic, Result};
+use miette::{miette, Context, IntoDiagnostic, Report, Result};
 use scopeguard::defer;
+use tokio::{
+    process::{Child, Command},
+    runtime::Handle,
+    select, signal,
+    sync::Mutex,
+    task, time,
+};
 
 use crate::{
     cli::{Args, NeovimArgs},
@@ -25,7 +30,7 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
     let dc = DevContainer::new(args.resolve_workspace_folder(), args.resolve_config_path())
         .wrap_err("failed to initialize devcontainer client")?;
 
-    dc.up(false, false)?;
+    dc.up(false, false).await?;
 
     // Run csrv for clipboard support if exists
     let csrv = if config.remote.use_clipboard_server {
@@ -48,15 +53,19 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
 
     defer! {
         if let Some(mut csrv) = csrv {
-            let _ = csrv.kill();
-            let _ = csrv.wait();
-            log!("Stopped": "csrv");
+            task::block_in_place(|| {
+                Handle::current().block_on(async move {
+                    csrv.kill().await.ok();
+                    csrv.wait().await.ok();
+                    log!("Stopped": "csrv");
+                });
+            });
         }
     }
 
     if neovim_args.no_remote_ui {
         // Run Neovim in container
-        run_neovim_directly(&dc)
+        run_neovim_directly(&dc).await
     } else {
         // Determine ports (auto-select host port if not specified, container port is always 54321)
         let (host_port, container_port) = if let Some(host_port) = &neovim_args.host_port {
@@ -85,7 +94,7 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
     }
 }
 
-fn run_neovim_directly(dc: &DevContainer) -> Result<()> {
+async fn run_neovim_directly(dc: &DevContainer) -> Result<()> {
     // Set environment variable to indicate that we are directly running Neovim from dockim
     dc.exec(
         &[
@@ -96,6 +105,7 @@ fn run_neovim_directly(dc: &DevContainer) -> Result<()> {
         ],
         RootMode::No,
     )
+    .await
 }
 
 async fn run_neovim_server_and_attach(
@@ -109,30 +119,41 @@ async fn run_neovim_server_and_attach(
     let env = if cfg!(target_os = "macos") {
         "DOCKIM_ON_MACOS"
     } else if cfg!(target_os = "windows")
-        || exec::capturing_stdout(&["uname", "-a"]).is_ok_and(|s| s.contains("Microsoft"))
+        || (exec::capturing_stdout(&["uname", "-a"])
+            .await
+            .is_ok_and(|s| s.contains("Microsoft")))
     {
         "DOCKIM_ON_WIN32"
     } else {
         "DOCKIM_ON_LINUX"
     };
-    let nvim = RefCell::new(dc.spawn(
-        &[
-            "/usr/bin/env",
-            &format!("{env}=1"),
-            "nvim",
-            "--headless",
-            "--listen",
-            &listen,
-        ],
-        RootMode::No,
-    )?);
+    let nvim = Rc::new(Mutex::new(
+        dc.spawn(
+            &[
+                "/usr/bin/env",
+                &format!("{env}=1"),
+                "nvim",
+                "--headless",
+                "--listen",
+                &listen,
+            ],
+            RootMode::No,
+        )
+        .await?,
+    ));
+
     defer! {
-        let _ = nvim.borrow_mut().kill();
-        let _ = nvim.borrow_mut().wait();
+        task::block_in_place(|| {
+            let nvim = Rc::clone(&nvim);
+            Handle::current().block_on(async move {
+                let _ = nvim.lock().await.kill().await;
+                let _ = nvim.lock().await.wait().await;
+            });
+        });
     }
 
     // Set up port forwarding
-    let guard = dc.forward_port(host_port, container_port)?;
+    let guard = dc.forward_port(host_port, container_port).await?;
 
     if config.remote.background {
         // Normally we want to remove the port forwarding when the server exits, but in the
@@ -147,11 +168,11 @@ async fn run_neovim_client_with_retry(
     config: &Config,
     dc: &DevContainer,
     host_port: &str,
-    nvim: &RefCell<std::process::Child>,
+    nvim: &Mutex<Child>,
 ) -> Result<()> {
     // Prepare execution arguments
     let server = format!("localhost:{host_port}");
-    let up_output = dc.up_and_inspect()?;
+    let up_output = dc.up_and_inspect().await?;
     let mut args = config.remote.get_args();
     for arg in &mut args {
         *arg = arg
@@ -195,9 +216,9 @@ async fn run_neovim_client(config: &Config, args: &[String], min_duration: Durat
 }
 
 async fn run_background_neovim_client(args: &[String]) -> Result<()> {
-    let mut child = exec::spawn(args)?;
+    let mut child = exec::spawn(args).await?;
     // wait for minimum duration and check if the child process is still running
-    tokio_time::sleep(Duration::from_millis(500)).await;
+    time::sleep(Duration::from_millis(500)).await;
     match child.try_wait().into_diagnostic() {
         Ok(Some(_)) => Err(miette!("Neovim client finished too fast in background")),
         Ok(None) => Ok(()),
@@ -206,17 +227,10 @@ async fn run_background_neovim_client(args: &[String]) -> Result<()> {
 }
 
 async fn run_foreground_neovim_client(args: &[String], min_duration: Duration) -> Result<()> {
-    let args_clone = args.to_vec();
-    let result = task::spawn_blocking(move || {
-        let start = Instant::now();
-        let output = exec::exec(&args_clone);
-        let elapsed = start.elapsed();
-        (output, elapsed)
-    });
+    let start = Instant::now();
+    let output = exec::exec(args).await;
+    let elapsed = start.elapsed();
 
-    let (output, elapsed) = result
-        .await
-        .map_err(|e| miette!("Task join error: {}", e))?;
     if elapsed < min_duration {
         Err(miette!(
             "Neovim client finished too fast: {} secs",
@@ -228,11 +242,11 @@ async fn run_foreground_neovim_client(args: &[String], min_duration: Duration) -
 }
 
 async fn handle_connection_failure(
-    nvim: &RefCell<Child>,
-    error: &miette::Report,
+    nvim: &Mutex<Child>,
+    error: &Report,
     retry_interval: u64,
 ) -> Result<bool> {
-    let is_server_finished = nvim.borrow_mut().try_wait().map_or(true, |s| s.is_some());
+    let is_server_finished = nvim.lock().await.try_wait().map_or(true, |s| s.is_some());
     if is_server_finished {
         return Ok(false);
     }
@@ -241,6 +255,6 @@ async fn handle_connection_failure(
         "Waiting":
         "Connection to Neovim failed: {error}; try reconnecting in a {retry_interval} seconds"
     );
-    tokio_time::sleep(Duration::from_secs(retry_interval)).await;
+    time::sleep(Duration::from_secs(retry_interval)).await;
     Ok(true)
 }

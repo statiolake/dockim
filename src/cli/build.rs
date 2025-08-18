@@ -8,26 +8,26 @@ use crate::{
     exec,
 };
 
-pub fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> {
+pub async fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> {
     let dc = DevContainer::new(args.resolve_workspace_folder(), args.resolve_config_path())
         .wrap_err("failed to initialize devcontainer client")?;
 
-    dc.up(build_args.rebuild, build_args.no_cache)?;
-    let up_cont = dc.up_and_inspect()?;
+    dc.up(build_args.rebuild, build_args.no_cache).await?;
+    let up_cont = dc.up_and_inspect().await?;
 
-    install_prerequisites(&dc, build_args.neovim_from_source)?;
-    install_neovim(config, &dc, build_args.neovim_from_source)?;
-    install_github_cli(&dc)?;
-    login_to_gh(&dc)?;
-    copy_copilot(&dc)?;
+    install_prerequisites(&dc, build_args.neovim_from_source).await?;
+    install_neovim(config, &dc, build_args.neovim_from_source).await?;
+    install_github_cli(&dc).await?;
+    login_to_gh(&dc).await?;
+    copy_copilot(&dc).await?;
 
-    prepare_opt_dir(&dc, &up_cont.remote_user)?;
-    install_dotfiles(config, &dc)?;
+    prepare_opt_dir(&dc, &up_cont.remote_user).await?;
+    install_dotfiles(config, &dc).await?;
 
     Ok(())
 }
 
-fn install_prerequisites(dc: &DevContainer, _neovim_from_source: bool) -> Result<()> {
+async fn install_prerequisites(dc: &DevContainer, _neovim_from_source: bool) -> Result<()> {
     let prerequisites = [
         "zsh",
         "curl",
@@ -57,28 +57,37 @@ fn install_prerequisites(dc: &DevContainer, _neovim_from_source: bool) -> Result
             ),
         ],
         RootMode::Yes,
-    )?;
+    )
+    .await?;
 
     Ok(())
 }
 
-fn install_neovim(config: &Config, dc: &DevContainer, neovim_from_source: bool) -> Result<()> {
+async fn install_neovim(
+    config: &Config,
+    dc: &DevContainer,
+    neovim_from_source: bool,
+) -> Result<()> {
     if dc
         .exec_capturing_stdout(&["/usr/local/bin/nvim", "--version"], RootMode::No)
+        .await
         .is_ok()
     {
         return Ok(());
     }
 
     if neovim_from_source {
-        return install_neovim_from_source(config, dc);
+        return install_neovim_from_source(config, dc).await;
     }
 
     // Try binary installation first
-    install_neovim_from_binary(config, dc)?;
+    install_neovim_from_binary(config, dc).await?;
 
     // Test if the binary actually works
-    let Err(output) = dc.exec_capturing(&["/usr/local/bin/nvim", "--version"], RootMode::No) else {
+    let Err(output) = dc
+        .exec_capturing(&["/usr/local/bin/nvim", "--version"], RootMode::No)
+        .await
+    else {
         return Ok(()); // Binary works fine
     };
 
@@ -91,12 +100,13 @@ fn install_neovim(config: &Config, dc: &DevContainer, neovim_from_source: bool) 
     }
 
     eprintln!("Warning: Binary installation failed due to glibc compatibility, falling back to source build");
-    install_neovim_from_source(config, dc)
+    install_neovim_from_source(config, dc).await
 }
 
-fn install_neovim_from_binary(config: &Config, dc: &DevContainer) -> Result<()> {
+async fn install_neovim_from_binary(config: &Config, dc: &DevContainer) -> Result<()> {
     let arch = dc
         .exec_capturing_stdout(&["uname", "-m"], RootMode::No)
+        .await
         .wrap_err("failed to determine system architecture")?
         .trim()
         .to_string();
@@ -126,12 +136,13 @@ fn install_neovim_from_binary(config: &Config, dc: &DevContainer) -> Result<()> 
             ),
         ],
         RootMode::Yes,
-    )?;
+    )
+    .await?;
 
     Ok(())
 }
 
-fn install_neovim_from_source(config: &Config, dc: &DevContainer) -> Result<()> {
+async fn install_neovim_from_source(config: &Config, dc: &DevContainer) -> Result<()> {
     // Install source build dependencies
     let source_deps = vec![
         "python3-pip",
@@ -159,7 +170,8 @@ fn install_neovim_from_source(config: &Config, dc: &DevContainer) -> Result<()> 
             ),
         ],
         RootMode::Yes,
-    )?;
+    )
+    .await?;
 
     let neovim_version = &config.neovim_version;
 
@@ -176,16 +188,17 @@ fn install_neovim_from_source(config: &Config, dc: &DevContainer) -> Result<()> 
         neovim_version = neovim_version
     );
 
-    dc.exec(&["sh", "-c", &build_cmd], RootMode::No)?;
+    dc.exec(&["sh", "-c", &build_cmd], RootMode::No).await?;
 
     // Install as root
     dc.exec(
         &["sh", "-c", "cd /tmp/neovim && make install"],
         RootMode::Yes,
-    )?;
+    )
+    .await?;
 
     // Cleanup
-    dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No)?;
+    dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No).await?;
 
     Ok(())
 }
@@ -198,10 +211,11 @@ fn is_glibc_compatibility_error_str(error_str: &str) -> bool {
         || error_lower.contains("undefined symbol")
 }
 
-fn install_github_cli(dc: &DevContainer) -> Result<()> {
+async fn install_github_cli(dc: &DevContainer) -> Result<()> {
     // Check if gh is already installed
     if dc
         .exec_capturing_stdout(&["~/.local/bin/gh", "--version"], RootMode::No)
+        .await
         .is_ok()
     {
         return Ok(());
@@ -209,6 +223,7 @@ fn install_github_cli(dc: &DevContainer) -> Result<()> {
 
     let arch = dc
         .exec_capturing_stdout(&["uname", "-m"], RootMode::No)
+        .await
         .wrap_err("failed to determine system architecture")?
         .trim()
         .to_string();
@@ -224,6 +239,7 @@ fn install_github_cli(dc: &DevContainer) -> Result<()> {
         "-s",
         "https://api.github.com/repos/cli/cli/releases/latest",
     ])
+    .await
     .wrap_err("failed to get latest gh CLI version from GitHub API")?;
 
     let api_json: serde_json::Value = serde_json::from_str(&api_response)
@@ -263,20 +279,22 @@ fn install_github_cli(dc: &DevContainer) -> Result<()> {
         ],
         RootMode::No,
     )
+    .await
 }
 
-fn login_to_gh(dc: &DevContainer) -> Result<()> {
-    let token = exec::capturing_stdout(&["gh", "auth", "token"])?;
+async fn login_to_gh(dc: &DevContainer) -> Result<()> {
+    let token = exec::capturing_stdout(&["gh", "auth", "token"]).await?;
     dc.exec_with_bytes_stdin(
         &["sh", "-c", "~/.local/bin/gh auth login --with-token"],
         token.trim().as_bytes(),
         RootMode::No,
-    )?;
+    )
+    .await?;
 
     Ok(())
 }
 
-fn copy_copilot(dc: &DevContainer) -> Result<()> {
+async fn copy_copilot(dc: &DevContainer) -> Result<()> {
     let local_home = home_dir().ok_or_else(|| miette!("failed to get local home directory"))?;
     for file in ["apps.json", "hosts.json", "versions.json"] {
         let local_path = local_home.join(".config").join("github-copilot").join(file);
@@ -285,13 +303,14 @@ fn copy_copilot(dc: &DevContainer) -> Result<()> {
         }
 
         let remote_path = format!("$(readlink -f $(echo $HOME))/.config/github-copilot/{file}");
-        dc.copy_file_host_to_container(&local_path, &remote_path, RootMode::No)?;
+        dc.copy_file_host_to_container(&local_path, &remote_path, RootMode::No)
+            .await?;
     }
 
     Ok(())
 }
 
-fn prepare_opt_dir(dc: &DevContainer, owner_user: &str) -> Result<()> {
+async fn prepare_opt_dir(dc: &DevContainer, owner_user: &str) -> Result<()> {
     dc.exec(
         &[
             "sh",
@@ -305,12 +324,13 @@ fn prepare_opt_dir(dc: &DevContainer, owner_user: &str) -> Result<()> {
             ),
         ],
         RootMode::Yes,
-    )?;
+    )
+    .await?;
 
     Ok(())
 }
 
-fn install_dotfiles(config: &Config, dc: &DevContainer) -> Result<()> {
+async fn install_dotfiles(config: &Config, dc: &DevContainer) -> Result<()> {
     dc.exec(
         &[
             "sh",
@@ -326,7 +346,8 @@ fn install_dotfiles(config: &Config, dc: &DevContainer) -> Result<()> {
             ),
         ],
         RootMode::No,
-    )?;
+    )
+    .await?;
 
     Ok(())
 }

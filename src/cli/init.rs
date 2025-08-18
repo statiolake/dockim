@@ -3,7 +3,11 @@ use std::{fs, path::Path};
 
 use crate::cli::{Args, InitArgs};
 
-pub fn main(_config: &crate::config::Config, args: &Args, _init_args: &InitArgs) -> Result<()> {
+pub async fn main(
+    _config: &crate::config::Config,
+    args: &Args,
+    _init_args: &InitArgs,
+) -> Result<()> {
     let workspace_folder = args
         .workspace_folder
         .as_deref()

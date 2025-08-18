@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 
 use crate::cli::{Args, InitConfigArgs};
 
-pub fn main(
+pub async fn main(
     _config: &crate::config::Config,
     _args: &Args,
     _init_config_args: &InitConfigArgs,

@@ -9,36 +9,36 @@ use crate::{
     devcontainer::DevContainer,
 };
 
-pub fn main(_config: &Config, args: &Args, port_args: &PortArgs) -> Result<()> {
+pub async fn main(_config: &Config, args: &Args, port_args: &PortArgs) -> Result<()> {
     let dc = DevContainer::new(args.resolve_workspace_folder(), args.resolve_config_path())
         .wrap_err("failed to initialize devcontainer client")?;
 
-    dc.up(false, false)?;
+    dc.up(false, false).await?;
 
     match &port_args.subcommand {
-        PortSubcommand::Add(add_args) => add_port(&dc, add_args),
-        PortSubcommand::Rm(rm_args) => remove_port(&dc, rm_args),
-        PortSubcommand::Ls(_ls_args) => list_ports(&dc),
+        PortSubcommand::Add(add_args) => add_port(&dc, add_args).await,
+        PortSubcommand::Rm(rm_args) => remove_port(&dc, rm_args).await,
+        PortSubcommand::Ls(_ls_args) => list_ports(&dc).await,
     }
 }
 
-fn add_port(dc: &DevContainer, add_args: &PortAddArgs) -> Result<()> {
+async fn add_port(dc: &DevContainer, add_args: &PortAddArgs) -> Result<()> {
     let (host_port, container_port) = parse_port_descriptor(&add_args.port_descriptor)?;
 
     // We need to forget because forward_port() returns a guard that will stop forwarding on drop
-    mem::forget(dc.forward_port(host_port, container_port)?);
+    mem::forget(dc.forward_port(host_port, container_port).await?);
 
     println!("Port forwarding started: {host_port}:{container_port}");
     Ok(())
 }
 
-fn remove_port(dc: &DevContainer, rm_args: &PortRmArgs) -> Result<()> {
+async fn remove_port(dc: &DevContainer, rm_args: &PortRmArgs) -> Result<()> {
     if rm_args.all {
-        dc.remove_all_forwarded_ports()?;
+        dc.remove_all_forwarded_ports().await?;
         println!("All port forwards removed");
     } else if let Some(port_descriptor) = &rm_args.port_descriptor {
         let (host_port, _) = parse_port_descriptor(port_descriptor)?;
-        dc.stop_forward_port(host_port)?;
+        dc.stop_forward_port(host_port).await?;
         println!("Port forwarding stopped: {host_port}");
     } else {
         bail!("Must specify either a port descriptor or --all flag");
@@ -46,8 +46,8 @@ fn remove_port(dc: &DevContainer, rm_args: &PortRmArgs) -> Result<()> {
     Ok(())
 }
 
-fn list_ports(dc: &DevContainer) -> Result<()> {
-    let ports = dc.list_forwarded_ports()?;
+async fn list_ports(dc: &DevContainer) -> Result<()> {
+    let ports = dc.list_forwarded_ports().await?;
 
     if ports.is_empty() {
         println!("No port forwards active");

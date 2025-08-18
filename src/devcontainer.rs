@@ -10,9 +10,11 @@ use std::{
     io::Write,
     net::TcpListener,
     path::{Path, PathBuf},
-    process::{Child, Stdio},
 };
+
+use std::process::Stdio;
 use tempfile::{NamedTempFile, TempPath};
+use tokio::{process::Child, runtime::Handle, task};
 
 use crate::exec::{self, ExecOutput};
 
@@ -57,8 +59,10 @@ impl RootMode {
 }
 
 impl DevContainer {
-    pub fn is_cli_installed() -> bool {
-        exec::exec(&[&*Self::devcontainer_command(), "--version"]).is_ok()
+    pub async fn is_cli_installed() -> bool {
+        exec::exec(&[&*Self::devcontainer_command(), "--version"])
+            .await
+            .is_ok()
     }
 
     pub fn new(workspace_folder: PathBuf, config_path: PathBuf) -> Result<Self> {
@@ -72,7 +76,7 @@ impl DevContainer {
         })
     }
 
-    pub fn up(&self, rebuild: bool, build_no_cache: bool) -> Result<()> {
+    pub async fn up(&self, rebuild: bool, build_no_cache: bool) -> Result<()> {
         let mut args = self.make_args(RootMode::No, "up");
 
         if rebuild {
@@ -88,31 +92,32 @@ impl DevContainer {
             *self.cached_up_output.borrow_mut() = None;
         }
 
-        exec::exec(&args)?;
+        exec::exec(&args).await?;
 
-        self.enable_host_docker_internal_in_rancher_desktop_on_lima()?;
-        self.enable_host_docker_internal_in_linux_dockerd()?;
+        self.enable_host_docker_internal_in_rancher_desktop_on_lima()
+            .await?;
+        self.enable_host_docker_internal_in_linux_dockerd().await?;
 
         Ok(())
     }
 
-    pub fn up_and_inspect(&self) -> Result<UpOutput> {
+    pub async fn up_and_inspect(&self) -> Result<UpOutput> {
         // Check cache first
         if let Some(cached) = self.cached_up_output.borrow().as_ref() {
             return Ok(cached.clone());
         }
 
         let args = self.make_args(RootMode::No, "up");
-        let result: UpOutput = exec::capturing_stdout(&args)
-            .and_then(|output| serde_json::from_str(&output).into_diagnostic())?;
+        let output = exec::capturing_stdout(&args).await?;
+        let result: UpOutput = serde_json::from_str(&output).into_diagnostic()?;
 
         // Cache the result
         *self.cached_up_output.borrow_mut() = Some(result.clone());
         Ok(result)
     }
 
-    fn get_compose_project(&self) -> Result<(String, Option<String>)> {
-        let up_output = self.up_and_inspect()?;
+    async fn get_compose_project(&self) -> Result<(String, Option<String>)> {
+        let up_output = self.up_and_inspect().await?;
         let container_id = up_output.container_id;
 
         let labels = exec::capturing_stdout(&[
@@ -121,7 +126,8 @@ impl DevContainer {
             "--format",
             "{{json .Config.Labels}}",
             &container_id,
-        ])?;
+        ])
+        .await?;
 
         let labels: HashMap<String, String> = serde_json::from_str(&labels)
             .into_diagnostic()
@@ -133,48 +139,56 @@ impl DevContainer {
         ))
     }
 
-    pub fn stop(&self) -> Result<()> {
-        let (container_id, compose_project) = self.get_compose_project()?;
+    pub async fn stop(&self) -> Result<()> {
+        let (container_id, compose_project) = self.get_compose_project().await?;
         if let Some(project) = compose_project {
             exec::exec(&["docker", "compose", "-p", &project, "stop"])
+                .await
                 .wrap_err("failed to stop docker compose stack")?;
         } else {
-            exec::exec(&["docker", "stop", &container_id]).wrap_err("failed to stop container")?;
+            exec::exec(&["docker", "stop", &container_id])
+                .await
+                .wrap_err("failed to stop container")?;
         }
         // Clear cache after stopping container
         *self.cached_up_output.borrow_mut() = None;
         Ok(())
     }
 
-    pub fn down(&self) -> Result<()> {
-        let (container_id, compose_project) = self.get_compose_project()?;
+    pub async fn down(&self) -> Result<()> {
+        let (container_id, compose_project) = self.get_compose_project().await?;
         if let Some(project) = compose_project {
             exec::exec(&["docker", "compose", "-p", &project, "down"])
+                .await
                 .wrap_err("failed to stop docker compose stack")?;
         } else {
-            exec::exec(&["docker", "stop", &container_id]).wrap_err("failed to stop container")?;
-            exec::exec(&["docker", "rm", &container_id]).wrap_err("failed to remove container")?;
+            exec::exec(&["docker", "stop", &container_id])
+                .await
+                .wrap_err("failed to stop container")?;
+            exec::exec(&["docker", "rm", &container_id])
+                .await
+                .wrap_err("failed to remove container")?;
         }
         // Clear cache after removing container
         *self.cached_up_output.borrow_mut() = None;
         Ok(())
     }
 
-    pub fn spawn<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<Child> {
+    pub async fn spawn<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<Child> {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        exec::spawn(&args)
+        exec::spawn(&args).await
     }
 
-    pub fn exec<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<()> {
+    pub async fn exec<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<()> {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        exec::exec(&args)
+        exec::exec(&args).await
     }
 
-    pub fn exec_capturing_stdout<S: AsRef<str>>(
+    pub async fn exec_capturing_stdout<S: AsRef<str>>(
         &self,
         command: &[S],
         root_mode: RootMode,
@@ -182,10 +196,10 @@ impl DevContainer {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        exec::capturing_stdout(&args)
+        exec::capturing_stdout(&args).await
     }
 
-    pub fn exec_capturing<S: AsRef<str>>(
+    pub async fn exec_capturing<S: AsRef<str>>(
         &self,
         command: &[S],
         root_mode: RootMode,
@@ -193,10 +207,10 @@ impl DevContainer {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        exec::capturing(&args)
+        exec::capturing(&args).await
     }
 
-    pub fn exec_with_stdin<S: AsRef<str>>(
+    pub async fn exec_with_stdin<S: AsRef<str>>(
         &self,
         command: &[S],
         stdin: Stdio,
@@ -205,10 +219,10 @@ impl DevContainer {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        exec::with_stdin(&args, stdin)
+        exec::with_stdin(&args, stdin).await
     }
 
-    pub fn exec_with_bytes_stdin<S: AsRef<str>>(
+    pub async fn exec_with_bytes_stdin<S: AsRef<str>>(
         &self,
         command: &[S],
         stdin: &[u8],
@@ -217,10 +231,10 @@ impl DevContainer {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        exec::with_bytes_stdin(&args, stdin)
+        exec::with_bytes_stdin(&args, stdin).await
     }
 
-    pub fn copy_file_host_to_container(
+    pub async fn copy_file_host_to_container(
         &self,
         src_host: &Path,
         dst_container: &str,
@@ -237,6 +251,7 @@ impl DevContainer {
             Stdio::from(src_host_file),
             root_mode,
         )
+        .await
         .wrap_err_with(|| {
             miette!(
                 "failed to create directory and write file contents to `{}` on container",
@@ -245,12 +260,18 @@ impl DevContainer {
         })
     }
 
-    pub fn forward_port(&self, host_port: &str, container_port: &str) -> Result<PortForwardGuard> {
+    pub async fn forward_port(
+        &self,
+        host_port: &str,
+        container_port: &str,
+    ) -> Result<PortForwardGuard> {
         let socat_container_name = self
             .socat_container_name(host_port)
+            .await
             .wrap_err("failed to determine port-forwarding container name")?;
         let up_output = self
             .up_and_inspect()
+            .await
             .wrap_err("failed to get devcontainer status")?;
 
         #[derive(Debug, Deserialize)]
@@ -259,16 +280,18 @@ impl DevContainer {
             ip_address: String,
         }
 
+        let network_output = exec::capturing_stdout(&[
+            "docker",
+            "inspect",
+            "--format",
+            "{{ json .NetworkSettings.Networks }}",
+            &up_output.container_id,
+        ])
+        .await?;
         let container_networks: HashMap<String, ContainerNetwork> =
-            serde_json::from_str(&exec::capturing_stdout(&[
-                "docker",
-                "inspect",
-                "--format",
-                "{{ json .NetworkSettings.Networks }}",
-                &up_output.container_id,
-            ])?)
-            .into_diagnostic()
-            .wrap_err("failed to parse container network settings")?;
+            serde_json::from_str(&network_output)
+                .into_diagnostic()
+                .wrap_err("failed to parse container network settings")?;
 
         let (container_network_name, container_network) = container_networks
             .iter()
@@ -296,6 +319,7 @@ impl DevContainer {
             "TCP-LISTEN:1234,fork",
             &socat_target,
         ])
+        .await
         .context("failed to launch port-forwarding container")?;
 
         Ok(PortForwardGuard {
@@ -303,16 +327,18 @@ impl DevContainer {
         })
     }
 
-    pub fn stop_forward_port(&self, host_port: &str) -> Result<()> {
+    pub async fn stop_forward_port(&self, host_port: &str) -> Result<()> {
         let socat_container_name = self
             .socat_container_name(host_port)
+            .await
             .wrap_err("failed to determine port-forwarding container name")?;
-        exec::exec(&["docker", "stop", &socat_container_name])
+        exec::exec(&["docker", "stop", &socat_container_name]).await
     }
 
-    pub fn list_forwarded_ports(&self) -> Result<Vec<ForwardedPort>> {
+    pub async fn list_forwarded_ports(&self) -> Result<Vec<ForwardedPort>> {
         let socat_container_name_prefix = self
             .socat_container_name("")
+            .await
             .wrap_err("failed to determine port-forwarding container name")?;
 
         let name_filter = format!("name={socat_container_name_prefix}");
@@ -325,6 +351,7 @@ impl DevContainer {
             "{{.Names}}\t{{.Command}}",
             "--no-trunc",
         ])
+        .await
         .wrap_err("failed to enumerate port-forwarding containers")?;
 
         let mut ports = Vec::new();
@@ -365,11 +392,11 @@ impl DevContainer {
         Ok(ports)
     }
 
-    pub fn remove_all_forwarded_ports(&self) -> Result<()> {
-        let ports = self.list_forwarded_ports()?;
+    pub async fn remove_all_forwarded_ports(&self) -> Result<()> {
+        let ports = self.list_forwarded_ports().await?;
 
         for port in ports {
-            self.stop_forward_port(&port.host_port)?;
+            self.stop_forward_port(&port.host_port).await?;
         }
 
         Ok(())
@@ -395,9 +422,10 @@ impl DevContainer {
         TcpListener::bind(("127.0.0.1", port)).is_ok()
     }
 
-    fn socat_container_name(&self, host_port: &str) -> Result<String> {
+    async fn socat_container_name(&self, host_port: &str) -> Result<String> {
         let up_output = self
             .up_and_inspect()
+            .await
             .wrap_err("failed to get devcontainer status")?;
 
         Ok(format!(
@@ -445,14 +473,15 @@ impl DevContainer {
         }
     }
 
-    fn enable_host_docker_internal_in_rancher_desktop_on_lima(&self) -> Result<()> {
-        if exec::exec(&["rdctl", "version"]).is_err() {
+    async fn enable_host_docker_internal_in_rancher_desktop_on_lima(&self) -> Result<()> {
+        if exec::exec(&["rdctl", "version"]).await.is_err() {
             // Not using Rancher Desktop, skipping
             return Ok(());
         }
 
         let host_ip_addr = {
             let vm_hosts = exec::capturing_stdout(&["rdctl", "shell", "cat", "/etc/hosts"])
+                .await
                 .wrap_err("failed to read /etc/hosts on Rancher Desktop VM")?;
             let Some(ip_addr) = vm_hosts.lines().find_map(|line| {
                 let parts = line.split_whitespace().collect_vec();
@@ -485,12 +514,13 @@ impl DevContainer {
                 ),
             ],
             RootMode::Yes,
-        )?;
+        )
+        .await?;
 
         Ok(())
     }
 
-    fn enable_host_docker_internal_in_linux_dockerd(&self) -> Result<()> {
+    async fn enable_host_docker_internal_in_linux_dockerd(&self) -> Result<()> {
         // Check if we're running on Linux
         if !cfg!(target_os = "linux") {
             return Ok(());
@@ -498,6 +528,7 @@ impl DevContainer {
 
         let container_hosts = self
             .exec_capturing_stdout(&["cat", "/etc/hosts"], RootMode::No)
+            .await
             .wrap_err("failed to read /etc/hosts")?;
 
         if container_hosts.contains("host.docker.internal") {
@@ -510,6 +541,7 @@ impl DevContainer {
                 &["sh", "-c", "ip route | grep default | cut -d' ' -f3"],
                 RootMode::No,
             )
+            .await
             .map(|ip| ip.trim().to_string())
             .unwrap_or_else(|_| "172.17.0.1".to_string()); // デフォルト値にフォールバック
 
@@ -520,7 +552,8 @@ impl DevContainer {
                 &format!("echo '{host_ip_addr} host.docker.internal' | tee -a /etc/hosts",),
             ],
             RootMode::Yes,
-        )?;
+        )
+        .await?;
 
         Ok(())
     }
@@ -757,6 +790,11 @@ pub struct PortForwardGuard {
 
 impl Drop for PortForwardGuard {
     fn drop(&mut self) {
-        let _ = exec::exec(&["docker", "stop", &self.socat_container_name]);
+        let container_name = self.socat_container_name.clone();
+        task::block_in_place(|| {
+            Handle::current().block_on(async move {
+                let _ = exec::exec(&["docker", "stop", &container_name]).await;
+            })
+        })
     }
 }

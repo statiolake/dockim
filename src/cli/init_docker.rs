@@ -1,13 +1,16 @@
 use miette::{IntoDiagnostic, Result};
-use std::{fs, path::Path};
 use serde_json::{json, Value};
+use std::{fs, path::Path};
 
 use crate::cli::{Args, InitDockerArgs};
 
-pub fn main(_config: &crate::config::Config, _args: &Args, _init_docker_args: &InitDockerArgs) -> Result<()> {
-
+pub async fn main(
+    _config: &crate::config::Config,
+    _args: &Args,
+    _init_docker_args: &InitDockerArgs,
+) -> Result<()> {
     let docker_config_dir = get_docker_config_dir();
-    
+
     create_docker_config_dir(&docker_config_dir)?;
     update_docker_config(&docker_config_dir)?;
 
@@ -36,7 +39,7 @@ fn create_docker_config_dir(docker_config_dir: &Path) -> Result<()> {
 
 fn update_docker_config(docker_config_dir: &Path) -> Result<()> {
     let config_file = docker_config_dir.join("config.json");
-    
+
     let mut config: Value = if config_file.exists() {
         let content = fs::read_to_string(&config_file).into_diagnostic()?;
         serde_json::from_str(&content).unwrap_or_else(|_| json!({}))

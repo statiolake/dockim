@@ -1,14 +1,15 @@
-use std::{
-    fmt::Debug,
-    io::Write,
-    process::{Child, Command, Stdio},
+use std::{fmt::Debug, process::Stdio};
+
+use tokio::{
+    io::AsyncWriteExt,
+    process::{Child, Command},
 };
 
 use miette::{ensure, IntoDiagnostic, Result, WrapErr};
 
 use crate::log;
 
-pub fn spawn<S: AsRef<str> + Debug>(args: &[S]) -> Result<Child> {
+pub async fn spawn<S: AsRef<str> + Debug>(args: &[S]) -> Result<Child> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
     log!("Spawning": "{args:?}");
@@ -28,7 +29,7 @@ pub fn spawn<S: AsRef<str> + Debug>(args: &[S]) -> Result<Child> {
     Ok(child)
 }
 
-pub fn exec<S: AsRef<str> + Debug>(args: &[S]) -> Result<()> {
+pub async fn exec<S: AsRef<str> + Debug>(args: &[S]) -> Result<()> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
     log!("Running": "{args:?}");
@@ -39,6 +40,7 @@ pub fn exec<S: AsRef<str> + Debug>(args: &[S]) -> Result<()> {
     let status = Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
         .status()
+        .await
         .into_diagnostic()
         .wrap_err("exec failed")?;
     ensure!(status.success(), "Command returned non-successful status",);
@@ -46,7 +48,7 @@ pub fn exec<S: AsRef<str> + Debug>(args: &[S]) -> Result<()> {
     Ok(())
 }
 
-pub fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()> {
+pub async fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
     log!("Running" ("with stdin"): "{args:?}");
@@ -58,6 +60,7 @@ pub fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()>
         .args(args.iter().map(|s| s.as_ref()))
         .stdin(stdin)
         .status()
+        .await
         .into_diagnostic()
         .wrap_err("exec failed")?;
     ensure!(status.success(), "Command returned non-successful status");
@@ -65,7 +68,7 @@ pub fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()>
     Ok(())
 }
 
-pub fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -> Result<()> {
+pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -> Result<()> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
     log!("Running" ("with stdin"): "{args:?}");
@@ -83,10 +86,12 @@ pub fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -> Resu
         .take()
         .unwrap()
         .write_all(bytes)
+        .await
         .into_diagnostic()
         .wrap_err("failed to write to child stdin")?;
     let status = child
         .wait()
+        .await
         .into_diagnostic()
         .wrap_err("failed to wait child process to finish")?;
     ensure!(status.success(), "Command returned non-successful status");
@@ -94,7 +99,7 @@ pub fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -> Resu
     Ok(())
 }
 
-pub fn capturing_stdout<S: AsRef<str> + Debug>(args: &[S]) -> Result<String> {
+pub async fn capturing_stdout<S: AsRef<str> + Debug>(args: &[S]) -> Result<String> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
     log!("Running" ("with capture"): "{args:?}");
@@ -105,6 +110,7 @@ pub fn capturing_stdout<S: AsRef<str> + Debug>(args: &[S]) -> Result<String> {
     let out = Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
         .output()
+        .await
         .into_diagnostic()
         .wrap_err("exec failed")?;
     ensure!(
@@ -123,7 +129,7 @@ pub struct ExecOutput {
     pub stderr: String,
 }
 
-pub fn capturing<S: AsRef<str> + Debug>(args: &[S]) -> Result<ExecOutput, ExecOutput> {
+pub async fn capturing<S: AsRef<str> + Debug>(args: &[S]) -> Result<ExecOutput, ExecOutput> {
     if args.is_empty() {
         return Err(ExecOutput {
             stdout: String::new(),
@@ -139,6 +145,7 @@ pub fn capturing<S: AsRef<str> + Debug>(args: &[S]) -> Result<ExecOutput, ExecOu
     let out = match Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
         .output()
+        .await
     {
         Ok(output) => output,
         Err(e) => {

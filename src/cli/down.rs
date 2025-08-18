@@ -6,8 +6,8 @@ use crate::{
     devcontainer::DevContainer,
 };
 
-pub fn main(_config: &Config, args: &Args, _down_args: &DownArgs) -> Result<()> {
+pub async fn main(_config: &Config, args: &Args, _down_args: &DownArgs) -> Result<()> {
     let dc = DevContainer::new(args.resolve_workspace_folder(), args.resolve_config_path())
         .wrap_err("failed to initialize devcontainer client")?;
-    dc.down()
+    dc.down().await
 }
