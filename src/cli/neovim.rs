@@ -1,10 +1,11 @@
 use std::{
     cell::RefCell,
     mem,
-    process::{Command, Stdio},
-    thread,
+    process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
+
+use tokio::{select, signal, task, time as tokio_time};
 
 use miette::{miette, Context, IntoDiagnostic, Result};
 use scopeguard::defer;
@@ -20,7 +21,7 @@ pub const SERVER_PLACEHOLDER: &str = "{server}";
 pub const CONTAINER_ID_PLACEHOLDER: &str = "{container_id}";
 pub const WORKSPACE_FOLDER_PLACEHOLDER: &str = "{workspace_folder}";
 
-pub fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
+pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
     let dc = DevContainer::new(args.resolve_workspace_folder(), args.resolve_config_path())
         .wrap_err("failed to initialize devcontainer client")?;
 
@@ -73,8 +74,14 @@ pub fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()
             (auto_host_port.to_string(), "54321".to_string())
         };
 
-        // Run Neovim server in the container and connect to it
-        run_neovim_server_and_attach(config, &dc, &host_port, &container_port)
+        // Run Neovim server in the container and connect to it. Shutdown gracefully on Ctrl+C
+        select! {
+            result = run_neovim_server_and_attach(config, &dc, &host_port, &container_port) => result,
+            _ = signal::ctrl_c() => {
+                log!("Stopping": "due to received Ctrl+C signal");
+                Ok(())
+            }
+        }
     }
 }
 
@@ -91,7 +98,7 @@ fn run_neovim_directly(dc: &DevContainer) -> Result<()> {
     )
 }
 
-fn run_neovim_server_and_attach(
+async fn run_neovim_server_and_attach(
     config: &Config,
     dc: &DevContainer,
     host_port: &str,
@@ -126,12 +133,22 @@ fn run_neovim_server_and_attach(
 
     // Set up port forwarding
     let guard = dc.forward_port(host_port, container_port)?;
+
     if config.remote.background {
         // Normally we want to remove the port forwarding when the server exits, but in the
         // background mode we want to keep it alive.
         mem::forget(guard);
     }
 
+    run_neovim_client_with_retry(config, dc, host_port, &nvim).await
+}
+
+async fn run_neovim_client_with_retry(
+    config: &Config,
+    dc: &DevContainer,
+    host_port: &str,
+    nvim: &RefCell<std::process::Child>,
+) -> Result<()> {
     // Prepare execution arguments
     let server = format!("localhost:{host_port}");
     let up_output = dc.up_and_inspect()?;
@@ -140,7 +157,10 @@ fn run_neovim_server_and_attach(
         *arg = arg
             .replace(SERVER_PLACEHOLDER, &server)
             .replace(CONTAINER_ID_PLACEHOLDER, &up_output.container_id)
-            .replace(WORKSPACE_FOLDER_PLACEHOLDER, &up_output.remote_workspace_folder);
+            .replace(
+                WORKSPACE_FOLDER_PLACEHOLDER,
+                &up_output.remote_workspace_folder,
+            );
     }
 
     let mut retry_interval = 1;
@@ -149,52 +169,78 @@ fn run_neovim_server_and_attach(
         // occures when the socat is not ready, for example.
         const MIN_DURATION: Duration = Duration::from_millis(500);
 
-        // Connect to Neovim from the host. Try multiple times because it sometimes fails
-        let result = if config.remote.background {
-            let mut child = exec::spawn(&args)?;
-            // wait for minimum duration and check if the child process is still running
-            thread::sleep(MIN_DURATION);
-            child
-                .try_wait()
-                .into_diagnostic()
-                .and_then(|status| match status {
-                    Some(_) => Err(miette!("Neovim client finished too fast in background")),
-                    None => Ok(()),
-                })
-        } else {
-            let start = Instant::now();
-            let output = exec::exec(&args);
-            let elapsed = start.elapsed();
-            if elapsed < MIN_DURATION {
-                Err(miette!(
-                    "Neovim client finished too fast: {} secs",
-                    elapsed.as_secs_f64()
-                ))
-            } else {
-                output
-            }
+        let result = run_neovim_client(config, &args, MIN_DURATION).await;
+        let Err(e) = result else {
+            break;
         };
 
-        match result {
-            Ok(_) => break,
-            Err(e) => {
-                let is_server_finished = nvim.borrow_mut().try_wait().map_or(true, |s| s.is_some());
-                if is_server_finished {
-                    return Err(e).wrap_err(
-                        "Connection to Neovim server failed and the server process exited",
-                    );
-                }
-
-                log!(
-                    "Waiting":
-                    "Connection to Neovim failed: {e}; try reconnecting in a {retry_interval} seconds"
-                );
-                thread::sleep(Duration::from_secs(retry_interval));
-                retry_interval *= 2;
-                retry_interval = retry_interval.min(10);
-            }
+        let should_retry = handle_connection_failure(nvim, &e, retry_interval).await?;
+        if !should_retry {
+            return Err(e)
+                .wrap_err("Connection to Neovim server failed and the server process exited");
         }
+
+        retry_interval = (retry_interval * 2).min(10);
     }
 
     Ok(())
+}
+
+async fn run_neovim_client(config: &Config, args: &[String], min_duration: Duration) -> Result<()> {
+    if config.remote.background {
+        run_background_neovim_client(args).await
+    } else {
+        run_foreground_neovim_client(args, min_duration).await
+    }
+}
+
+async fn run_background_neovim_client(args: &[String]) -> Result<()> {
+    let mut child = exec::spawn(args)?;
+    // wait for minimum duration and check if the child process is still running
+    tokio_time::sleep(Duration::from_millis(500)).await;
+    match child.try_wait().into_diagnostic() {
+        Ok(Some(_)) => Err(miette!("Neovim client finished too fast in background")),
+        Ok(None) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+async fn run_foreground_neovim_client(args: &[String], min_duration: Duration) -> Result<()> {
+    let args_clone = args.to_vec();
+    let result = task::spawn_blocking(move || {
+        let start = Instant::now();
+        let output = exec::exec(&args_clone);
+        let elapsed = start.elapsed();
+        (output, elapsed)
+    });
+
+    let (output, elapsed) = result
+        .await
+        .map_err(|e| miette!("Task join error: {}", e))?;
+    if elapsed < min_duration {
+        Err(miette!(
+            "Neovim client finished too fast: {} secs",
+            elapsed.as_secs_f64()
+        ))
+    } else {
+        output
+    }
+}
+
+async fn handle_connection_failure(
+    nvim: &RefCell<Child>,
+    error: &miette::Report,
+    retry_interval: u64,
+) -> Result<bool> {
+    let is_server_finished = nvim.borrow_mut().try_wait().map_or(true, |s| s.is_some());
+    if is_server_finished {
+        return Ok(false);
+    }
+
+    log!(
+        "Waiting":
+        "Connection to Neovim failed: {error}; try reconnecting in a {retry_interval} seconds"
+    );
+    tokio_time::sleep(Duration::from_secs(retry_interval)).await;
+    Ok(true)
 }
