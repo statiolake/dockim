@@ -4,7 +4,6 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    cell::RefCell,
     collections::HashMap,
     fs::{self, File},
     io::Write,
@@ -15,7 +14,7 @@ use std::{
 
 use tar;
 use tempfile::{NamedTempFile, TempPath};
-use tokio::{process::Child, runtime::Handle, task};
+use tokio::{process::Child, runtime::Handle, sync::Mutex, task};
 
 use crate::{
     exec::{self, ExecOutput},
@@ -55,7 +54,7 @@ pub struct DevContainer {
     workspace_folder: PathBuf,
     config_path: PathBuf,
     overriden_config_paths: OverridenConfigPaths,
-    cached_up_output: RefCell<Option<UpOutput>>,
+    cached_up_output: Mutex<Option<UpOutput>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -84,7 +83,7 @@ impl DevContainer {
             workspace_folder,
             config_path,
             overriden_config_paths: overriden_config,
-            cached_up_output: RefCell::new(None),
+            cached_up_output: Mutex::new(None),
         })
     }
 
@@ -101,7 +100,7 @@ impl DevContainer {
 
         // Clear cache when container is rebuilt
         if rebuild {
-            *self.cached_up_output.borrow_mut() = None;
+            *self.cached_up_output.lock().await = None;
         }
 
         exec::exec(&args).await?;
@@ -115,7 +114,7 @@ impl DevContainer {
 
     pub async fn up_and_inspect(&self) -> Result<UpOutput> {
         // Check cache first
-        if let Some(cached) = self.cached_up_output.borrow().as_ref() {
+        if let Some(cached) = self.cached_up_output.lock().await.as_ref() {
             return Ok(cached.clone());
         }
 
@@ -124,7 +123,7 @@ impl DevContainer {
         let result: UpOutput = serde_json::from_str(&output).into_diagnostic()?;
 
         // Cache the result
-        *self.cached_up_output.borrow_mut() = Some(result.clone());
+        *self.cached_up_output.lock().await = Some(result.clone());
         Ok(result)
     }
 
@@ -163,7 +162,7 @@ impl DevContainer {
                 .wrap_err("failed to stop container")?;
         }
         // Clear cache after stopping container
-        *self.cached_up_output.borrow_mut() = None;
+        *self.cached_up_output.lock().await = None;
         Ok(())
     }
 
@@ -182,7 +181,7 @@ impl DevContainer {
                 .wrap_err("failed to remove container")?;
         }
         // Clear cache after removing container
-        *self.cached_up_output.borrow_mut() = None;
+        *self.cached_up_output.lock().await = None;
         Ok(())
     }
 

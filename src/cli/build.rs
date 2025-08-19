@@ -1,29 +1,67 @@
-use dirs::home_dir;
+use std::sync::Arc;
+
 use itertools::Itertools;
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
+use tokio::task::JoinSet;
 
 use crate::{
     cli::{Args, BuildArgs},
     config::Config,
     devcontainer::{ContainerFileDestination, DevContainer, RootMode},
-    exec,
+    exec, log,
 };
 
 pub async fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> {
-    let dc = DevContainer::new(args.resolve_workspace_folder(), args.resolve_config_path())
-        .wrap_err("failed to initialize devcontainer client")?;
+    log!("Building": "in async mode: {}", if build_args.no_async { "no" } else { "yes" });
+    let config = Arc::new(config.clone());
+    let dc = Arc::new(
+        DevContainer::new(args.resolve_workspace_folder(), args.resolve_config_path())
+            .wrap_err("failed to initialize devcontainer client")?,
+    );
 
     dc.up(build_args.rebuild, build_args.no_cache).await?;
     let up_cont = dc.up_and_inspect().await?;
 
     install_prerequisites(&dc, build_args.neovim_from_source).await?;
-    install_neovim(config, &dc, build_args.neovim_from_source).await?;
-    install_github_cli(&dc).await?;
-    login_to_gh(&dc).await?;
-    copy_copilot(&dc).await?;
 
-    prepare_opt_dir(&dc, &up_cont.remote_user).await?;
-    install_dotfiles(config, &dc).await?;
+    macro_rules! run_sync_or_async {
+        ($($fut:expr),* $(,)?) => {
+            if build_args.no_async {
+                $($fut.await?;)*
+            } else {
+                let mut set = JoinSet::new();
+                $(set.spawn($fut);)*
+                set.join_all()
+                    .await
+                    .into_iter()
+                    .collect::<Result<()>>()
+                    .wrap_err("failed to execute some build step in async")?
+            }
+        }
+    }
+
+    run_sync_or_async! {
+        {
+            let config = Arc::clone(&config);
+            let dc = Arc::clone(&dc);
+            let neovim_from_source = build_args.neovim_from_source;
+            async move { install_neovim(&config, &dc, neovim_from_source).await }
+        },
+        {
+            let dc = Arc::clone(&dc);
+            async move { setup_github_cli(&dc).await }
+        },
+        {
+            let dc = Arc::clone(&dc);
+            async move { copy_copilot(&dc).await }
+        },
+        {
+            let dc = Arc::clone(&dc);
+            async move { prepare_opt_dir(&dc, &up_cont.remote_user).await }
+        },
+    }
+
+    install_dotfiles(&config, &dc).await?;
 
     Ok(())
 }
@@ -212,91 +250,99 @@ fn is_glibc_compatibility_error_str(error_str: &str) -> bool {
         || error_lower.contains("undefined symbol")
 }
 
-async fn install_github_cli(dc: &DevContainer) -> Result<()> {
-    // Check if gh is already installed
-    if dc
-        .exec_capturing_stdout(&["~/.local/bin/gh", "--version"], RootMode::No)
+async fn setup_github_cli(dc: &DevContainer) -> Result<()> {
+    async fn install(dc: &DevContainer) -> Result<()> {
+        // Check if gh is already installed
+        if dc
+            .exec_capturing_stdout(&["~/.local/bin/gh", "--version"], RootMode::No)
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        let arch = dc
+            .exec_capturing_stdout(&["uname", "-m"], RootMode::No)
+            .await
+            .wrap_err("failed to determine system architecture")?
+            .trim()
+            .to_string();
+        let arch = match arch.as_str() {
+            "x86_64" => "amd64",
+            "aarch64" | "arm64" => "arm64",
+            _ => return Err(miette!("Unsupported architecture: {}", arch)),
+        };
+
+        // Get the latest release version from GitHub API on host machine
+        let api_response = exec::capturing_stdout(&[
+            "curl",
+            "-s",
+            "https://api.github.com/repos/cli/cli/releases/latest",
+        ])
         .await
-        .is_ok()
-    {
-        return Ok(());
+        .wrap_err("failed to get latest gh CLI version from GitHub API")?;
+
+        let api_json: serde_json::Value = serde_json::from_str(&api_response)
+            .into_diagnostic()
+            .wrap_err("failed to parse GitHub API response")?;
+
+        let latest_version = api_json["tag_name"]
+            .as_str()
+            .ok_or_else(|| miette!("tag_name not found in GitHub API response"))?
+            .to_string();
+
+        let download_url = format!(
+            "https://github.com/cli/cli/releases/download/{}/gh_{}_linux_{}.tar.gz",
+            latest_version,
+            latest_version.trim_start_matches('v'),
+            arch
+        );
+
+        dc.exec(
+            &[
+                "sh",
+                "-c",
+                &format!(
+                    concat!(
+                        "mkdir -p ~/.local/bin && ",
+                        "rm -f /tmp/gh.tar.gz && ",
+                        "curl -L -o /tmp/gh.tar.gz {download_url} && ",
+                        "tar -C /tmp -xzf /tmp/gh.tar.gz && ",
+                        "cp /tmp/gh_{version}_linux_{arch}/bin/gh ~/.local/bin/gh && ",
+                        "chmod +x ~/.local/bin/gh && ",
+                        "rm -rf /tmp/gh.tar.gz /tmp/gh_{version}_linux_{arch}"
+                    ),
+                    download_url = download_url,
+                    version = latest_version.trim_start_matches('v'),
+                    arch = arch
+                ),
+            ],
+            RootMode::No,
+        )
+        .await
     }
 
-    let arch = dc
-        .exec_capturing_stdout(&["uname", "-m"], RootMode::No)
-        .await
-        .wrap_err("failed to determine system architecture")?
-        .trim()
-        .to_string();
-    let arch = match arch.as_str() {
-        "x86_64" => "amd64",
-        "aarch64" | "arm64" => "arm64",
-        _ => return Err(miette!("Unsupported architecture: {}", arch)),
-    };
+    async fn login(dc: &DevContainer) -> Result<()> {
+        let token = exec::capturing_stdout(&["gh", "auth", "token"]).await?;
+        dc.exec_with_bytes_stdin(
+            &["sh", "-c", "~/.local/bin/gh auth login --with-token"],
+            token.trim().as_bytes(),
+            RootMode::No,
+        )
+        .await?;
 
-    // Get the latest release version from GitHub API on host machine
-    let api_response = exec::capturing_stdout(&[
-        "curl",
-        "-s",
-        "https://api.github.com/repos/cli/cli/releases/latest",
-    ])
-    .await
-    .wrap_err("failed to get latest gh CLI version from GitHub API")?;
+        Ok(())
+    }
 
-    let api_json: serde_json::Value = serde_json::from_str(&api_response)
-        .into_diagnostic()
-        .wrap_err("failed to parse GitHub API response")?;
-
-    let latest_version = api_json["tag_name"]
-        .as_str()
-        .ok_or_else(|| miette!("tag_name not found in GitHub API response"))?
-        .to_string();
-
-    let download_url = format!(
-        "https://github.com/cli/cli/releases/download/{}/gh_{}_linux_{}.tar.gz",
-        latest_version,
-        latest_version.trim_start_matches('v'),
-        arch
-    );
-
-    dc.exec(
-        &[
-            "sh",
-            "-c",
-            &format!(
-                concat!(
-                    "mkdir -p ~/.local/bin && ",
-                    "rm -f /tmp/gh.tar.gz && ",
-                    "curl -L -o /tmp/gh.tar.gz {download_url} && ",
-                    "tar -C /tmp -xzf /tmp/gh.tar.gz && ",
-                    "cp /tmp/gh_{version}_linux_{arch}/bin/gh ~/.local/bin/gh && ",
-                    "chmod +x ~/.local/bin/gh && ",
-                    "rm -rf /tmp/gh.tar.gz /tmp/gh_{version}_linux_{arch}"
-                ),
-                download_url = download_url,
-                version = latest_version.trim_start_matches('v'),
-                arch = arch
-            ),
-        ],
-        RootMode::No,
-    )
-    .await
-}
-
-async fn login_to_gh(dc: &DevContainer) -> Result<()> {
-    let token = exec::capturing_stdout(&["gh", "auth", "token"]).await?;
-    dc.exec_with_bytes_stdin(
-        &["sh", "-c", "~/.local/bin/gh auth login --with-token"],
-        token.trim().as_bytes(),
-        RootMode::No,
-    )
-    .await?;
+    install(dc).await?;
+    login(dc).await?;
 
     Ok(())
 }
 
 async fn copy_copilot(dc: &DevContainer) -> Result<()> {
-    let local_home = home_dir().ok_or_else(|| miette!("failed to get local home directory"))?;
+    let local_home =
+        dirs::home_dir().ok_or_else(|| miette!("failed to get local home directory"))?;
     let file_mappings = ["apps.json", "hosts.json", "versions.json"]
         .into_iter()
         .map(|file| {

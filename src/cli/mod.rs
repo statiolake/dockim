@@ -165,6 +165,9 @@ pub struct BuildArgs {
 
     #[clap(long)]
     pub neovim_from_source: bool,
+
+    #[clap(long)]
+    pub no_async: bool,
 }
 
 #[derive(Debug, clap::Parser)]
