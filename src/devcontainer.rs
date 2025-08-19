@@ -4,19 +4,27 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    cell::RefCell,
     collections::HashMap,
-    fs::{self, File},
+    fs::{self},
     io::Write,
     net::TcpListener,
     path::{Path, PathBuf},
+    process::Stdio,
+};
+use tempfile::{NamedTempFile, TempPath};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::{Child, ChildStdin, ChildStdout, Command},
+    runtime::Handle,
+    sync::Mutex,
+    task,
+    time::{self, Duration},
 };
 
-use std::process::Stdio;
-use tempfile::{NamedTempFile, TempPath};
-use tokio::{process::Child, runtime::Handle, task};
-
-use crate::exec::{self, ExecOutput};
+use crate::{
+    exec::{self, ExecOutput},
+    log,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpOutput {
@@ -39,11 +47,253 @@ pub struct ForwardedPort {
 }
 
 #[derive(Debug)]
+struct PersistentShell {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    prompt_marker: String,
+}
+
+impl PersistentShell {
+    async fn new(args: Vec<String>) -> Result<Self> {
+        if args.is_empty() {
+            return Err(miette!("No command provided to spawn"));
+        }
+
+        let command = &args[0];
+        let cmd_args = &args[1..];
+
+        log!("Spawning": "{args:?}");
+
+        let mut child = Command::new(command)
+            .args(cmd_args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .into_diagnostic()
+            .wrap_err("Failed to spawn persistent shell")?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| miette!("Failed to get stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| miette!("Failed to get stdout"))?;
+        let stdout = BufReader::new(stdout);
+
+        let prompt_marker = format!("__DOCKIM_READY_{}__", rand::rng().random::<u32>());
+
+        let mut shell = PersistentShell {
+            child,
+            stdin,
+            stdout,
+            prompt_marker,
+        };
+
+        // Setup custom PS1
+        shell.setup_prompt().await?;
+
+        log!("Initialized": "persistent shell");
+
+        Ok(shell)
+    }
+
+    async fn setup_prompt(&mut self) -> Result<()> {
+        let setup_cmd = format!("export PS1='{}\\n'\n", self.prompt_marker);
+        self.stdin
+            .write_all(setup_cmd.as_bytes())
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to setup prompt")?;
+        self.stdin
+            .flush()
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to flush stdin")?;
+
+        // Wait for the prompt to appear
+        self.wait_for_prompt().await?;
+        Ok(())
+    }
+
+    async fn execute_command<S: AsRef<str>>(&mut self, command: &[S]) -> Result<String> {
+        let cmd_line = command
+            .iter()
+            .map(|s| s.as_ref())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        log!("Running" ("persistent shell"): "{cmd_line}");
+
+        // Add error checking by checking exit status
+        let full_cmd = format!("{} ; echo \"__EXIT_CODE_$?__\"\n", cmd_line);
+
+        self.stdin
+            .write_all(full_cmd.as_bytes())
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to write command")?;
+        self.stdin
+            .flush()
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to flush stdin")?;
+
+        let output = self.read_until_prompt().await?;
+
+        // Check for exit code in output
+        if let Some(exit_code_start) = output.rfind("__EXIT_CODE_") {
+            if let Some(exit_code_end) = output[exit_code_start + 12..].find("__") {
+                let exit_code_str =
+                    &output[exit_code_start + 12..exit_code_start + 12 + exit_code_end];
+                if let Ok(exit_code) = exit_code_str.parse::<i32>() {
+                    let clean_output = output[..exit_code_start].trim_end().to_string();
+                    if exit_code != 0 {
+                        return Err(miette!(
+                            "Command failed with exit code {}: {}",
+                            exit_code,
+                            clean_output
+                        ));
+                    }
+                    return Ok(clean_output);
+                }
+            }
+        }
+
+        Ok(output)
+    }
+
+    async fn execute_command_with_stdin<S: AsRef<str>>(
+        &mut self,
+        command: &[S],
+        stdin_data: &[u8],
+    ) -> Result<String> {
+        let cmd_line = command
+            .iter()
+            .map(|s| s.as_ref())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        log!("Running" ("persistent shell with stdin"): "{cmd_line}, stdin_size={}", stdin_data.len());
+
+        // Add error checking by checking exit status
+        let full_cmd = format!("{} ; echo \"__EXIT_CODE_$?__\"\n", cmd_line);
+
+        // Write command first
+        self.stdin
+            .write_all(full_cmd.as_bytes())
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to write command")?;
+
+        // Then write stdin data
+        self.stdin
+            .write_all(stdin_data)
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to write stdin data")?;
+
+        self.stdin
+            .flush()
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to flush stdin")?;
+
+        let output = self.read_until_prompt().await?;
+
+        // Check for exit code in output
+        if let Some(exit_code_start) = output.rfind("__EXIT_CODE_") {
+            if let Some(exit_code_end) = output[exit_code_start + 12..].find("__") {
+                let exit_code_str =
+                    &output[exit_code_start + 12..exit_code_start + 12 + exit_code_end];
+                if let Ok(exit_code) = exit_code_str.parse::<i32>() {
+                    let clean_output = output[..exit_code_start].trim_end().to_string();
+                    if exit_code != 0 {
+                        return Err(miette!(
+                            "Command failed with exit code {}: {}",
+                            exit_code,
+                            clean_output
+                        ));
+                    }
+                    return Ok(clean_output);
+                }
+            }
+        }
+
+        Ok(output)
+    }
+
+    async fn wait_for_prompt(&mut self) -> Result<()> {
+        let mut line = String::new();
+        loop {
+            dbg!(&line);
+            line.clear();
+            match time::timeout(Duration::from_secs(30), self.stdout.read_line(&mut line)).await {
+                Ok(Ok(0)) => return Err(miette!("Unexpected EOF from shell")),
+                Ok(Ok(_)) => {
+                    if line.trim() == self.prompt_marker {
+                        return Ok(());
+                    }
+                }
+                Ok(Err(e)) => {
+                    return Err(e)
+                        .into_diagnostic()
+                        .wrap_err("Failed to read from shell")
+                }
+                Err(_) => return Err(miette!("Timeout waiting for prompt")),
+            }
+        }
+    }
+
+    async fn read_until_prompt(&mut self) -> Result<String> {
+        let mut output = String::new();
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            match time::timeout(Duration::from_secs(30), self.stdout.read_line(&mut line)).await {
+                Ok(Ok(0)) => return Err(miette!("Unexpected EOF from shell")),
+                Ok(Ok(_)) => {
+                    if line.trim() == self.prompt_marker {
+                        break;
+                    }
+                    output.push_str(&line);
+                }
+                Ok(Err(e)) => {
+                    return Err(e)
+                        .into_diagnostic()
+                        .wrap_err("Failed to read from shell")
+                }
+                Err(_) => return Err(miette!("Timeout reading command output")),
+            }
+        }
+
+        Ok(output)
+    }
+}
+
+impl Drop for PersistentShell {
+    fn drop(&mut self) {
+        let child = &mut self.child;
+        task::block_in_place(|| {
+            Handle::current().block_on(async {
+                let _ = child.kill().await;
+            })
+        });
+    }
+}
+
+#[derive(Debug)]
 pub struct DevContainer {
     workspace_folder: PathBuf,
     config_path: PathBuf,
     overriden_config_paths: OverridenConfigPaths,
-    cached_up_output: RefCell<Option<UpOutput>>,
+    cached_up_output: Mutex<Option<UpOutput>>,
+    normal_shell: Mutex<Option<PersistentShell>>,
+    root_shell: Mutex<Option<PersistentShell>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -72,7 +322,9 @@ impl DevContainer {
             workspace_folder,
             config_path,
             overriden_config_paths: overriden_config,
-            cached_up_output: RefCell::new(None),
+            cached_up_output: Mutex::new(None),
+            normal_shell: Mutex::new(None),
+            root_shell: Mutex::new(None),
         })
     }
 
@@ -89,7 +341,10 @@ impl DevContainer {
 
         // Clear cache when container is rebuilt
         if rebuild {
-            *self.cached_up_output.borrow_mut() = None;
+            *self.cached_up_output.lock().await = None;
+            // Clear persistent shells
+            *self.normal_shell.lock().await = None;
+            *self.root_shell.lock().await = None;
         }
 
         exec::exec(&args).await?;
@@ -101,10 +356,78 @@ impl DevContainer {
         Ok(())
     }
 
+    async fn get_or_init_shell(&self, root_mode: RootMode) -> Result<()> {
+        let shell_mutex = match root_mode {
+            RootMode::Yes => &self.root_shell,
+            RootMode::No => &self.normal_shell,
+        };
+
+        let mut shell_guard = shell_mutex.lock().await;
+        if shell_guard.is_none() {
+            log!("Initializing": "shell for {:?} mode", root_mode);
+
+            let mut args = self.make_args(root_mode, "exec");
+            args.push("bash".to_string());
+
+            let shell = PersistentShell::new(args)
+                .await
+                .wrap_err_with(|| miette!("Failed to initialize shell for {:?}", root_mode))?;
+
+            *shell_guard = Some(shell);
+
+            log!("Initialized": "shell for {:?} mode", root_mode);
+        }
+        Ok(())
+    }
+
+    async fn execute_with_shell<S: AsRef<str>>(
+        &self,
+        command: &[S],
+        root_mode: RootMode,
+    ) -> Result<String> {
+        self.get_or_init_shell(root_mode).await?;
+
+        let shell_mutex = match root_mode {
+            RootMode::Yes => &self.root_shell,
+            RootMode::No => &self.normal_shell,
+        };
+
+        let mut shell_guard = shell_mutex.lock().await;
+        let shell = shell_guard
+            .as_mut()
+            .ok_or_else(|| miette!("Shell not initialized"))?;
+
+        shell.execute_command(command).await
+    }
+
+    async fn execute_with_shell_stdin<S: AsRef<str>>(
+        &self,
+        command: &[S],
+        stdin_data: &[u8],
+        root_mode: RootMode,
+    ) -> Result<String> {
+        self.get_or_init_shell(root_mode).await?;
+
+        let shell_mutex = match root_mode {
+            RootMode::Yes => &self.root_shell,
+            RootMode::No => &self.normal_shell,
+        };
+
+        let mut shell_guard = shell_mutex.lock().await;
+        let shell = shell_guard
+            .as_mut()
+            .ok_or_else(|| miette!("Shell not initialized"))?;
+
+        shell.execute_command_with_stdin(command, stdin_data).await
+    }
+
     pub async fn up_and_inspect(&self) -> Result<UpOutput> {
         // Check cache first
-        if let Some(cached) = self.cached_up_output.borrow().as_ref() {
-            return Ok(cached.clone());
+        {
+            let cached_guard = self.cached_up_output.lock().await;
+            if let Some(cached) = cached_guard.as_ref() {
+                return Ok(cached.clone());
+            }
         }
 
         let args = self.make_args(RootMode::No, "up");
@@ -112,7 +435,7 @@ impl DevContainer {
         let result: UpOutput = serde_json::from_str(&output).into_diagnostic()?;
 
         // Cache the result
-        *self.cached_up_output.borrow_mut() = Some(result.clone());
+        *self.cached_up_output.lock().await = Some(result.clone());
         Ok(result)
     }
 
@@ -151,7 +474,10 @@ impl DevContainer {
                 .wrap_err("failed to stop container")?;
         }
         // Clear cache after stopping container
-        *self.cached_up_output.borrow_mut() = None;
+        *self.cached_up_output.lock().await = None;
+        // Clear persistent shells
+        *self.normal_shell.lock().await = None;
+        *self.root_shell.lock().await = None;
         Ok(())
     }
 
@@ -170,7 +496,10 @@ impl DevContainer {
                 .wrap_err("failed to remove container")?;
         }
         // Clear cache after removing container
-        *self.cached_up_output.borrow_mut() = None;
+        *self.cached_up_output.lock().await = None;
+        // Clear persistent shells
+        *self.normal_shell.lock().await = None;
+        *self.root_shell.lock().await = None;
         Ok(())
     }
 
@@ -182,10 +511,8 @@ impl DevContainer {
     }
 
     pub async fn exec<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<()> {
-        let mut args = self.make_args(root_mode, "exec");
-        args.extend(command.iter().map(|s| s.as_ref().to_string()));
-
-        exec::exec(&args).await
+        let _output = self.execute_with_shell(command, root_mode).await?;
+        Ok(())
     }
 
     pub async fn exec_capturing_stdout<S: AsRef<str>>(
@@ -193,10 +520,7 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<String> {
-        let mut args = self.make_args(root_mode, "exec");
-        args.extend(command.iter().map(|s| s.as_ref().to_string()));
-
-        exec::capturing_stdout(&args).await
+        self.execute_with_shell(command, root_mode).await
     }
 
     pub async fn exec_capturing<S: AsRef<str>>(
@@ -204,22 +528,16 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<ExecOutput, ExecOutput> {
-        let mut args = self.make_args(root_mode, "exec");
-        args.extend(command.iter().map(|s| s.as_ref().to_string()));
-
-        exec::capturing(&args).await
-    }
-
-    pub async fn exec_with_stdin<S: AsRef<str>>(
-        &self,
-        command: &[S],
-        stdin: Stdio,
-        root_mode: RootMode,
-    ) -> Result<()> {
-        let mut args = self.make_args(root_mode, "exec");
-        args.extend(command.iter().map(|s| s.as_ref().to_string()));
-
-        exec::with_stdin(&args, stdin).await
+        match self.execute_with_shell(command, root_mode).await {
+            Ok(stdout) => Ok(ExecOutput {
+                stdout,
+                stderr: String::new(),
+            }),
+            Err(e) => Err(ExecOutput {
+                stdout: String::new(),
+                stderr: e.to_string(),
+            }),
+        }
     }
 
     pub async fn exec_with_bytes_stdin<S: AsRef<str>>(
@@ -228,10 +546,10 @@ impl DevContainer {
         stdin: &[u8],
         root_mode: RootMode,
     ) -> Result<()> {
-        let mut args = self.make_args(root_mode, "exec");
-        args.extend(command.iter().map(|s| s.as_ref().to_string()));
-
-        exec::with_bytes_stdin(&args, stdin).await
+        let _output = self
+            .execute_with_shell_stdin(command, stdin, root_mode)
+            .await?;
+        Ok(())
     }
 
     pub async fn copy_file_host_to_container(
@@ -240,24 +558,20 @@ impl DevContainer {
         dst_container: &str,
         root_mode: RootMode,
     ) -> Result<()> {
-        let src_host_file = File::open(src_host)
+        let file_contents = fs::read(src_host)
             .into_diagnostic()
-            .wrap_err_with(|| miette!("failed to open {}", src_host.display()))?;
+            .wrap_err_with(|| miette!("failed to read {}", src_host.display()))?;
 
         // Combine mkdir and cat into a single command
         let combined_cmd = format!("mkdir -p $(dirname {dst_container}) && cat > {dst_container}");
-        self.exec_with_stdin(
-            &["sh", "-c", &combined_cmd],
-            Stdio::from(src_host_file),
-            root_mode,
-        )
-        .await
-        .wrap_err_with(|| {
-            miette!(
-                "failed to create directory and write file contents to `{}` on container",
-                dst_container
-            )
-        })
+        self.exec_with_bytes_stdin(&["sh", "-c", &combined_cmd], &file_contents, root_mode)
+            .await
+            .wrap_err_with(|| {
+                miette!(
+                    "failed to create directory and write file contents to `{}` on container",
+                    dst_container
+                )
+            })
     }
 
     pub async fn forward_port(
