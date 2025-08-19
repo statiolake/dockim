@@ -705,17 +705,31 @@ fn generate_overriden_compose_yaml(config_path: &Path) -> Result<Option<NamedTem
         return Ok(None);
     };
 
+    let config_dir = config_path.parent().unwrap_or(Path::new("."));
     let services: Vec<_> = docker_compose_paths
         .iter()
-        .filter_map(|path| {
-            let path = path.as_str()?;
-            let path = Path::new(path);
-            if path.exists() {
-                Some(path)
+        .map(|path| {
+            let path = path.as_str().ok_or_else(|| {
+                miette!(
+                    "failed to parse compose file's path in {}",
+                    config_path.display()
+                )
+            })?;
+
+            let path = if Path::new(path).is_absolute() {
+                PathBuf::from(path)
             } else {
-                None
+                config_dir.join(path)
+            };
+
+            if !path.exists() {
+                return Err(miette!("compose file '{}' does not exist", path.display()));
             }
+
+            Ok(path)
         })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
         .map(|path| {
             let path = path.to_path_buf();
             let contents = fs::read_to_string(&path)
