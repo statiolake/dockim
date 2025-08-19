@@ -1,10 +1,11 @@
 use dirs::home_dir;
+use itertools::Itertools;
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
 
 use crate::{
     cli::{Args, BuildArgs},
     config::Config,
-    devcontainer::{DevContainer, RootMode},
+    devcontainer::{ContainerFileDestination, DevContainer, RootMode},
     exec,
 };
 
@@ -296,16 +297,19 @@ async fn login_to_gh(dc: &DevContainer) -> Result<()> {
 
 async fn copy_copilot(dc: &DevContainer) -> Result<()> {
     let local_home = home_dir().ok_or_else(|| miette!("failed to get local home directory"))?;
-    for file in ["apps.json", "hosts.json", "versions.json"] {
-        let local_path = local_home.join(".config").join("github-copilot").join(file);
-        if !local_path.exists() {
-            continue;
-        }
+    let file_mappings = ["apps.json", "hosts.json", "versions.json"]
+        .into_iter()
+        .map(|file| {
+            let local_path = local_home.join(".config").join("github-copilot").join(file);
+            let dest = ContainerFileDestination::Home(format!(".config/github-copilot/{file}"));
 
-        let remote_path = format!("$(readlink -f $(echo $HOME))/.config/github-copilot/{file}");
-        dc.copy_file_host_to_container(&local_path, &remote_path, RootMode::No)
-            .await?;
-    }
+            (local_path, dest)
+        })
+        .filter(|(local_path, _)| local_path.exists())
+        .collect_vec();
+
+    dc.copy_files_to_container(&file_mappings, RootMode::No)
+        .await?;
 
     Ok(())
 }

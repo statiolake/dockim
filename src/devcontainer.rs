@@ -10,13 +10,17 @@ use std::{
     io::Write,
     net::TcpListener,
     path::{Path, PathBuf},
+    process::Stdio,
 };
 
-use std::process::Stdio;
+use tar;
 use tempfile::{NamedTempFile, TempPath};
 use tokio::{process::Child, runtime::Handle, task};
 
-use crate::exec::{self, ExecOutput};
+use crate::{
+    exec::{self, ExecOutput},
+    log,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpOutput {
@@ -36,6 +40,14 @@ pub struct UpOutput {
 pub struct ForwardedPort {
     pub host_port: String,
     pub container_port: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum ContainerFileDestination {
+    /// Absolute path from container root
+    Root(String),
+    /// Relative path from user's home directory
+    Home(String),
 }
 
 #[derive(Debug)]
@@ -234,30 +246,97 @@ impl DevContainer {
         exec::with_bytes_stdin(&args, stdin).await
     }
 
-    pub async fn copy_file_host_to_container(
+    pub async fn copy_files_to_container(
         &self,
-        src_host: &Path,
-        dst_container: &str,
+        file_mappings: &[(PathBuf, ContainerFileDestination)],
         root_mode: RootMode,
     ) -> Result<()> {
-        let src_host_file = File::open(src_host)
-            .into_diagnostic()
-            .wrap_err_with(|| miette!("failed to open {}", src_host.display()))?;
+        if file_mappings.is_empty() {
+            return Ok(());
+        }
 
-        // Combine mkdir and cat into a single command
-        let combined_cmd = format!("mkdir -p $(dirname {dst_container}) && cat > {dst_container}");
-        self.exec_with_stdin(
-            &["sh", "-c", &combined_cmd],
-            Stdio::from(src_host_file),
-            root_mode,
-        )
-        .await
-        .wrap_err_with(|| {
-            miette!(
-                "failed to create directory and write file contents to `{}` on container",
-                dst_container
-            )
-        })
+        // Group files by destination type
+        let mut root_files = Vec::new();
+        let mut home_files = Vec::new();
+
+        for (src_path, destination) in file_mappings {
+            match destination {
+                ContainerFileDestination::Root(path) => {
+                    root_files.push((src_path.clone(), path.clone()))
+                }
+                ContainerFileDestination::Home(path) => {
+                    home_files.push((src_path.clone(), path.clone()))
+                }
+            }
+        }
+
+        // Copy root files if any
+        if !root_files.is_empty() {
+            log!("Copying": "{} files to container root via tar", file_mappings.len());
+            let tar_data = Self::create_tar_archive(&root_files).await?;
+            log!("Created": "root tar archive with {} bytes", tar_data.len());
+
+            // Extract tar in container
+            self.exec_with_bytes_stdin(&["tar", "-xf", "-", "-C", "/"], &tar_data, root_mode)
+                .await
+                .wrap_err("failed to extract tar archive in container")?;
+            log!("Copied": "files to container home directory");
+        }
+
+        // Copy home files if any
+        if !home_files.is_empty() {
+            log!("Copying": "{} files to container home directory via tar", file_mappings.len());
+            let tar_data = Self::create_tar_archive(&home_files).await?;
+            log!("Created": "home tar archive with {} bytes", tar_data.len());
+
+            // Extract tar in container home directory
+            // We need to wrap command with 'sh -c' to expand $HOME variable
+            self.exec_with_bytes_stdin(&["sh", "-c", "tar -xf - -C $HOME"], &tar_data, root_mode)
+                .await
+                .wrap_err("failed to extract tar archive to home directory in container")?;
+            log!("Copied": "files to container home directory");
+        }
+
+        Ok(())
+    }
+
+    async fn create_tar_archive(file_mappings: &[(PathBuf, String)]) -> Result<Vec<u8>> {
+        let mut tar_data = Vec::new();
+
+        {
+            let mut tar_builder = tar::Builder::new(&mut tar_data);
+            for (src_path, dst_path) in file_mappings {
+                let mut file = File::open(src_path)
+                    .into_diagnostic()
+                    .wrap_err_with(|| miette!("failed to open {}", src_path.display()))?;
+
+                let metadata = file.metadata().into_diagnostic().wrap_err_with(|| {
+                    miette!("failed to get metadata for {}", src_path.display())
+                })?;
+
+                let mut header = tar::Header::new_gnu();
+                header.set_size(metadata.len());
+                header.set_mode(0o644);
+                header.set_cksum();
+
+                // Use relative path for tar (remove leading slash if present)
+                let tar_path = dst_path.strip_prefix("/").unwrap_or(dst_path);
+
+                tar_builder
+                    .append_data(&mut header, tar_path, &mut file)
+                    .into_diagnostic()
+                    .wrap_err_with(|| {
+                        miette!("failed to add {} to tar archive", src_path.display())
+                    })?;
+            }
+
+            tar_builder
+                .finish()
+                .into_diagnostic()
+                .wrap_err("failed to finalize tar archive")?;
+        }
+
+        Ok(tar_data)
     }
 
     pub async fn forward_port(
