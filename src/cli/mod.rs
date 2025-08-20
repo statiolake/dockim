@@ -4,6 +4,7 @@ use crate::config::Config;
 
 pub mod bash;
 pub mod build;
+pub mod clipboard;
 pub mod down;
 pub mod exec;
 pub mod init;
