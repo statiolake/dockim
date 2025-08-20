@@ -20,10 +20,10 @@ pub struct Args {
     #[clap(subcommand)]
     pub subcommand: Subcommand,
 
-    #[clap(short = 'w', long)]
+    #[clap(short = 'w', long, help = "Workspace folder path (defaults to current directory)")]
     pub workspace_folder: Option<PathBuf>,
 
-    #[clap(short = 'c', long)]
+    #[clap(short = 'c', long, help = "Dev container configuration name or path. If contains '/', treated as full path to devcontainer.json. Otherwise, treated as config name: .devcontainer/<config>/devcontainer.json")]
     pub config: Option<String>,
 }
 
@@ -102,33 +102,40 @@ mod tests {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Subcommand {
+    #[clap(about = "Initialize dev container configuration files")]
     Init(InitArgs),
 
-    #[clap(name = "init-config")]
+    #[clap(name = "init-config", about = "Generate dockim configuration file automatically")]
     InitConfig(InitConfigArgs),
 
-    #[clap(name = "init-docker")]
+    #[clap(name = "init-docker", about = "Override some Docker client configuration settings")]
     InitDocker(InitDockerArgs),
 
+    #[clap(about = "Start up the dev container")]
     Up(UpArgs),
 
+    #[clap(about = "Install Neovim, dotfiles and other tools on top of the dev container")]
     Build(BuildArgs),
 
+    #[clap(about = "Stop the running dev container")]
     Stop(StopArgs),
 
+    #[clap(about = "Stop and remove the dev container")]
     Down(DownArgs),
 
-    #[clap(alias = "v")]
+    #[clap(alias = "v", about = "Launch Neovim in the dev container")]
     Neovim(NeovimArgs),
 
-    #[clap(alias = "sh")]
+    #[clap(alias = "sh", about = "Open an interactive shell in the dev container")]
     Shell(ShellArgs),
 
+    #[clap(about = "Open an interactive bash shell in the dev container")]
     Bash(BashArgs),
 
+    #[clap(about = "Execute a command in the dev container")]
     Exec(ExecArgs),
 
-    #[clap(alias = "p")]
+    #[clap(alias = "p", about = "Manage port forwarding")]
     Port(PortArgs),
 }
 
@@ -148,47 +155,49 @@ pub struct InitDockerArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct UpArgs {
-    #[clap(long)]
+    #[clap(long, help = "Force rebuild the container image before starting")]
     pub rebuild: bool,
 
-    #[clap(long)]
+    #[clap(long, help = "Disable build cache when rebuilding")]
     pub build_no_cache: bool,
 }
 
 #[derive(Debug, clap::Parser)]
 pub struct BuildArgs {
-    #[clap(long)]
+    #[clap(long, help = "Force rebuild even if image exists")]
     pub rebuild: bool,
 
-    #[clap(long)]
+    #[clap(long, help = "Disable Docker build cache")]
     pub no_cache: bool,
 
-    #[clap(long)]
+    #[clap(long, help = "Build Neovim from source instead of downloading prebuilt binary")]
     pub neovim_from_source: bool,
 
-    #[clap(long)]
+    #[clap(long, help = "Disable asynchronous build mode")]
     pub no_async: bool,
 }
 
 #[derive(Debug, clap::Parser)]
 pub struct NeovimArgs {
-    #[clap(long, default_value = "false")]
+    #[clap(long, default_value = "false", help = "Launch Neovim directly using dev container's TTY instead of remote UI")]
     pub no_remote_ui: bool,
 
-    #[clap(short = 'p', long)]
+    #[clap(short = 'p', long, help = "Host port for remote UI connection (default: random available port)")]
     pub host_port: Option<String>,
 
-    #[clap(long)]
+    #[clap(long, help = "Container port for remote UI connection (default: 54321)")]
     pub container_port: Option<String>,
 }
 
 #[derive(Debug, clap::Parser)]
 pub struct ShellArgs {
+    #[clap(help = "Additional arguments to pass to the shell")]
     pub args: Vec<String>,
 }
 
 #[derive(Debug, clap::Parser)]
 pub struct BashArgs {
+    #[clap(help = "Additional arguments to pass to bash")]
     pub args: Vec<String>,
 }
 
@@ -197,6 +206,7 @@ pub struct DownArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct ExecArgs {
+    #[clap(help = "Command and arguments to execute in the container")]
     pub args: Vec<String>,
 }
 
@@ -208,23 +218,28 @@ pub struct PortArgs {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum PortSubcommand {
+    #[clap(about = "Add a port forwarding rule")]
     Add(PortAddArgs),
+    
+    #[clap(about = "Remove a port forwarding rule")]
     Rm(PortRmArgs),
+    
+    #[clap(about = "List current port forwarding rules")]
     Ls(PortLsArgs),
 }
 
 #[derive(Debug, clap::Parser)]
 pub struct PortAddArgs {
-    /// "8080" or "8080:1234" (host:container)
+    #[clap(help = "Port descriptor in format \"8080\" or \"8080:1234\" (host:container)")]
     pub port_descriptor: String,
 }
 
 #[derive(Debug, clap::Parser)]
 pub struct PortRmArgs {
-    /// "8080" or "8080:1234" (host:container) to remove
+    #[clap(help = "Port descriptor to remove (\"8080\" or \"8080:1234\" format)")]
     pub port_descriptor: Option<String>,
 
-    #[clap(long)]
+    #[clap(long, help = "Remove all port forwarding rules")]
     pub all: bool,
 }
 
