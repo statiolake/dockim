@@ -1,23 +1,17 @@
 use std::{
     collections::HashMap,
     mem,
-    process::Stdio,
     rc::Rc,
     time::{Duration, Instant},
 };
 
 use miette::{miette, Context, IntoDiagnostic, Report, Result};
 use scopeguard::defer;
-use tokio::{
-    process::{Child, Command},
-    runtime::Handle,
-    select, signal,
-    sync::Mutex,
-    task, time,
-};
+use tokio::{process::Child, runtime::Handle, select, signal, sync::Mutex, task, time};
 
 use crate::{
     cli::{Args, BuildArgs, NeovimArgs},
+    clipboard,
     config::Config,
     devcontainer::{DevContainer, RootMode},
     exec, log,
@@ -52,32 +46,22 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
         crate::cli::build::main(config, args, &build_args).await?;
     }
 
-    // Run csrv for clipboard support if exists
-    let csrv = if config.remote.use_clipboard_server {
-        let csrv = Command::new("csrv")
-            .env("CSRV_PORT", "55232")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok();
-
-        if csrv.is_some() {
-            log!("Started": "csrv");
-        }
-
-        csrv
+    // Run clipboard server for clipboard support if enabled
+    let clipboard_server = if config.remote.use_clipboard_server {
+        let (handle, shutdown_tx) = clipboard::spawn_clipboard_server(55232);
+        log!("Started": "clipboard server on port 55232");
+        Some((handle, shutdown_tx))
     } else {
         None
     };
 
     defer! {
-        if let Some(mut csrv) = csrv {
+        if let Some((handle, shutdown_tx)) = clipboard_server {
             task::block_in_place(|| {
                 Handle::current().block_on(async move {
-                    csrv.kill().await.ok();
-                    csrv.wait().await.ok();
-                    log!("Stopped": "csrv");
+                    let _ = shutdown_tx.send(());
+                    let _ = handle.await;
+                    log!("Stopped": "clipboard server");
                 });
             });
         }

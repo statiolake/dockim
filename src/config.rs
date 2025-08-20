@@ -112,7 +112,7 @@ fn default_remote_background() -> bool {
 }
 
 fn default_remote_use_clipboard_server() -> bool {
-    true
+    false
 }
 
 fn default_remote_args() -> Vec<String> {

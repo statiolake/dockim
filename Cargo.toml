@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.4.18", features = ["derive"] }
 colored = "2.1.0"
-tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "signal", "process", "time", "io-util", "sync"] }
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "signal", "process", "time", "io-util", "sync", "net"] }
 dirs = "5.0.1"
 itertools = "0.12.1"
 maplit = "1.0.2"
