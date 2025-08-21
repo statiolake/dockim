@@ -1,3 +1,7 @@
+Note: this tool is under active development. All documentations, including this README and the book, are written by AI and may not be accurate for now. Please refer to the source code for the actual behavior of the tool.
+
+---
+
 # 🐋 Dockim
 
 A modern CLI tool for managing Dev Containers with ease. Dockim simplifies your development workflow by providing intuitive commands for container management and Neovim integration.
@@ -72,6 +76,7 @@ dockim neovim --no-remote-ui
 ### Project Setup
 
 #### `dockim init`
+
 Creates a new dev container configuration in the current directory.
 
 ```bash
@@ -79,11 +84,13 @@ dockim init
 ```
 
 Generates:
+
 - `.devcontainer/devcontainer.json` - Dev container configuration
-- `.devcontainer/compose.yml` - Docker Compose configuration  
+- `.devcontainer/compose.yml` - Docker Compose configuration
 - `.devcontainer/Dockerfile` - Custom Docker image definition
 
 #### `dockim init-config`
+
 Creates a default configuration file for dockim.
 
 ```bash
@@ -95,6 +102,7 @@ Creates `~/.config/dockim/config.toml` with default settings that you can custom
 ### Container Management
 
 #### `dockim build`
+
 Builds the dev container with all dependencies.
 
 ```bash
@@ -112,6 +120,7 @@ dockim build --neovim-from-source
 ```
 
 #### `dockim up`
+
 Starts the dev container (builds if necessary).
 
 ```bash
@@ -122,6 +131,7 @@ dockim up --rebuild
 ```
 
 #### `dockim stop` / `dockim down`
+
 Stops or removes the dev container.
 
 ```bash
@@ -135,6 +145,7 @@ dockim down
 ### Development Tools
 
 #### `dockim neovim` (alias: `dockim v`)
+
 Launches Neovim with remote UI support.
 
 ```bash
@@ -151,6 +162,7 @@ dockim v --no-remote-ui
 The remote UI mode starts a Neovim server inside the container and connects to it from your host system using the configured client.
 
 #### `dockim shell` / `dockim bash`
+
 Opens an interactive shell in the container.
 
 ```bash
@@ -163,6 +175,7 @@ dockim bash
 ```
 
 #### `dockim exec`
+
 Executes a command in the container.
 
 ```bash
@@ -176,6 +189,7 @@ dockim exec git status
 ### Port Management
 
 #### `dockim port add`
+
 Sets up port forwarding from host to container.
 
 ```bash
@@ -187,6 +201,7 @@ dockim port add 8080:3000
 ```
 
 #### `dockim port ls`
+
 Lists active port forwards.
 
 ```bash
@@ -194,6 +209,7 @@ dockim port ls
 ```
 
 #### `dockim port rm`
+
 Removes port forwarding.
 
 ```bash
@@ -215,25 +231,33 @@ dockim init-config
 ### Configuration Options
 
 #### `shell`
+
 Default shell to use in containers.
+
 ```toml
 shell = "/usr/bin/bash"
 ```
 
 #### `neovim_version`
+
 Neovim version to install when using `--neovim-from-source`.
+
 ```toml
 neovim_version = "v0.11.0"
 ```
 
 #### `dotfiles_repository_name`
+
 Name of your dotfiles repository for automatic setup.
+
 ```toml
 dotfiles_repository_name = "dotfiles"
 ```
 
 #### `dotfiles_install_command`
+
 Command to run after cloning your dotfiles.
+
 ```toml
 dotfiles_install_command = "echo 'no dotfiles install command configured'"
 ```
