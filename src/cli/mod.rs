@@ -53,13 +53,17 @@ impl Args {
     }
 
     pub fn resolve_config_path(&self) -> Result<PathBuf> {
+        let workspace_folder = self.resolve_workspace_folder()?;
         let path = match &self.config {
-            None => PathBuf::from(".devcontainer/devcontainer.json"),
+            None => workspace_folder
+                .join(".devcontainer")
+                .join("devcontainer.json"),
             Some(config_arg) => {
                 if config_arg.contains('/') || config_arg.contains(MAIN_SEPARATOR) {
                     PathBuf::from(config_arg)
                 } else {
-                    PathBuf::from(".devcontainer")
+                    workspace_folder
+                        .join(".devcontainer")
                         .join(config_arg)
                         .join("devcontainer.json")
                 }
