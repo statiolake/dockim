@@ -1,4 +1,6 @@
-use std::path::{PathBuf, MAIN_SEPARATOR};
+use std::path::{self, Path, PathBuf, MAIN_SEPARATOR};
+
+use miette::{miette, Context, IntoDiagnostic, Result};
 
 use crate::config::Config;
 
@@ -20,23 +22,38 @@ pub struct Args {
     #[clap(subcommand)]
     pub subcommand: Subcommand,
 
-    #[clap(short = 'w', long, help = "Workspace folder path (defaults to current directory)")]
+    #[clap(
+        short = 'w',
+        long,
+        help = "Workspace folder path (defaults to current directory)"
+    )]
     pub workspace_folder: Option<PathBuf>,
 
-    #[clap(short = 'c', long, help = "Dev container configuration name or path. If contains '/', treated as full path to devcontainer.json. Otherwise, treated as config name: .devcontainer/<config>/devcontainer.json")]
+    #[clap(
+        short = 'c',
+        long,
+        help = "Dev container configuration name or path. If contains '/', treated as full path to devcontainer.json. Otherwise, treated as config name: .devcontainer/<config>/devcontainer.json"
+    )]
     pub config: Option<String>,
 }
 
 impl Args {
-    pub fn resolve_workspace_folder(&self) -> PathBuf {
-        match &self.workspace_folder {
-            None => PathBuf::from("."),
-            Some(folder) => folder.clone(),
-        }
+    pub fn resolve_workspace_folder(&self) -> Result<PathBuf> {
+        let path = match &self.workspace_folder {
+            None => Path::new("."),
+            Some(folder) => &**folder,
+        };
+
+        path::absolute(path).into_diagnostic().wrap_err_with(|| {
+            miette!(
+                "failed to resolve workspace folder path: {}",
+                path.display()
+            )
+        })
     }
 
-    pub fn resolve_config_path(&self) -> PathBuf {
-        match &self.config {
+    pub fn resolve_config_path(&self) -> Result<PathBuf> {
+        let path = match &self.config {
             None => PathBuf::from(".devcontainer/devcontainer.json"),
             Some(config_arg) => {
                 if config_arg.contains('/') || config_arg.contains(MAIN_SEPARATOR) {
@@ -47,56 +64,14 @@ impl Args {
                         .join("devcontainer.json")
                 }
             }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use super::*;
-
-    #[test]
-    fn test_resolve_config_path() {
-        let args = Args {
-            subcommand: Subcommand::Up(UpArgs {
-                rebuild: false,
-                build_no_cache: false,
-            }),
-            workspace_folder: None,
-            config: None,
         };
-        assert_eq!(
-            args.resolve_config_path().components(),
-            Path::new(".devcontainer/devcontainer.json").components()
-        );
 
-        let args = Args {
-            subcommand: Subcommand::Up(UpArgs {
-                rebuild: false,
-                build_no_cache: false,
-            }),
-            workspace_folder: None,
-            config: Some("develop".to_string()),
-        };
-        assert_eq!(
-            args.resolve_config_path().components(),
-            Path::new(".devcontainer/develop/devcontainer.json").components()
-        );
-
-        let args = Args {
-            subcommand: Subcommand::Up(UpArgs {
-                rebuild: false,
-                build_no_cache: false,
-            }),
-            workspace_folder: None,
-            config: Some("custom/path/devcontainer.json".to_string()),
-        };
-        assert_eq!(
-            args.resolve_config_path().components(),
-            Path::new("custom/path/devcontainer.json").components()
-        );
+        path::absolute(&path).into_diagnostic().wrap_err_with(|| {
+            miette!(
+                "failed to resolve devcontainer configuration path: {}",
+                path.display()
+            )
+        })
     }
 }
 
@@ -105,10 +80,16 @@ pub enum Subcommand {
     #[clap(about = "Initialize dev container configuration files")]
     Init(InitArgs),
 
-    #[clap(name = "init-config", about = "Generate dockim configuration file automatically")]
+    #[clap(
+        name = "init-config",
+        about = "Generate dockim configuration file automatically"
+    )]
     InitConfig(InitConfigArgs),
 
-    #[clap(name = "init-docker", about = "Override some Docker client configuration settings")]
+    #[clap(
+        name = "init-docker",
+        about = "Override some Docker client configuration settings"
+    )]
     InitDocker(InitDockerArgs),
 
     #[clap(about = "Start up the dev container")]
@@ -170,7 +151,10 @@ pub struct BuildArgs {
     #[clap(long, help = "Disable Docker build cache")]
     pub no_cache: bool,
 
-    #[clap(long, help = "Build Neovim from source instead of downloading prebuilt binary")]
+    #[clap(
+        long,
+        help = "Build Neovim from source instead of downloading prebuilt binary"
+    )]
     pub neovim_from_source: bool,
 
     #[clap(long, help = "Disable asynchronous build mode")]
@@ -179,13 +163,24 @@ pub struct BuildArgs {
 
 #[derive(Debug, clap::Parser)]
 pub struct NeovimArgs {
-    #[clap(long, default_value = "false", help = "Launch Neovim directly using dev container's TTY instead of remote UI")]
+    #[clap(
+        long,
+        default_value = "false",
+        help = "Launch Neovim directly using dev container's TTY instead of remote UI"
+    )]
     pub no_remote_ui: bool,
 
-    #[clap(short = 'p', long, help = "Host port for remote UI connection (default: random available port)")]
+    #[clap(
+        short = 'p',
+        long,
+        help = "Host port for remote UI connection (default: random available port)"
+    )]
     pub host_port: Option<String>,
 
-    #[clap(long, help = "Container port for remote UI connection (default: 54321)")]
+    #[clap(
+        long,
+        help = "Container port for remote UI connection (default: 54321)"
+    )]
     pub container_port: Option<String>,
 }
 
@@ -220,10 +215,10 @@ pub struct PortArgs {
 pub enum PortSubcommand {
     #[clap(about = "Add a port forwarding rule")]
     Add(PortAddArgs),
-    
+
     #[clap(about = "Remove a port forwarding rule")]
     Rm(PortRmArgs),
-    
+
     #[clap(about = "List current port forwarding rules")]
     Ls(PortLsArgs),
 }

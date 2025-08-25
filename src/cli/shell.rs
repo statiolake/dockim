@@ -6,8 +6,11 @@ use crate::{
 use miette::{miette, Result, WrapErr};
 
 pub async fn main(config: &Config, args: &Args, shell_args: &ShellArgs) -> Result<()> {
-    let dc = DevContainer::new(args.resolve_workspace_folder(), args.resolve_config_path())
-        .wrap_err("failed to initialize devcontainer client")?;
+    let dc = DevContainer::new(
+        args.resolve_workspace_folder()?,
+        args.resolve_config_path()?,
+    )
+    .wrap_err("failed to initialize devcontainer client")?;
 
     dc.up(false, false).await?;
 

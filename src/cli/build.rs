@@ -15,8 +15,11 @@ pub async fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Resul
     log!("Building": "in async mode: {}", if build_args.no_async { "no" } else { "yes" });
     let config = Arc::new(config.clone());
     let dc = Arc::new(
-        DevContainer::new(args.resolve_workspace_folder(), args.resolve_config_path())
-            .wrap_err("failed to initialize devcontainer client")?,
+        DevContainer::new(
+            args.resolve_workspace_folder()?,
+            args.resolve_config_path()?,
+        )
+        .wrap_err("failed to initialize devcontainer client")?,
     );
 
     dc.up(build_args.rebuild, build_args.no_cache).await?;

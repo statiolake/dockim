@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     mem,
     process::Stdio,
     rc::Rc,
@@ -27,8 +28,11 @@ pub const CONTAINER_ID_PLACEHOLDER: &str = "{container_id}";
 pub const WORKSPACE_FOLDER_PLACEHOLDER: &str = "{workspace_folder}";
 
 pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
-    let dc = DevContainer::new(args.resolve_workspace_folder(), args.resolve_config_path())
-        .wrap_err("failed to initialize devcontainer client")?;
+    let dc = DevContainer::new(
+        args.resolve_workspace_folder()?,
+        args.resolve_config_path()?,
+    )
+    .wrap_err("failed to initialize devcontainer client")?;
 
     dc.up(false, false).await?;
 
@@ -65,7 +69,7 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
 
     if neovim_args.no_remote_ui {
         // Run Neovim in container
-        run_neovim_directly(&dc).await
+        run_neovim_directly(&dc, args).await
     } else {
         // Determine ports (auto-select host port if not specified, container port is always 54321)
         let (host_port, container_port) = if let Some(host_port) = &neovim_args.host_port {
@@ -85,7 +89,7 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
 
         // Run Neovim server in the container and connect to it. Shutdown gracefully on Ctrl+C
         select! {
-            result = run_neovim_server_and_attach(config, &dc, &host_port, &container_port) => result,
+            result = run_neovim_server_and_attach(config, &dc, args, &host_port, &container_port) => result,
             _ = signal::ctrl_c() => {
                 log!("Stopping": "due to received Ctrl+C signal");
                 Ok(())
@@ -94,53 +98,69 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
     }
 }
 
-async fn run_neovim_directly(dc: &DevContainer) -> Result<()> {
-    // Set environment variable to indicate that we are directly running Neovim from dockim
-    dc.exec(
-        &[
-            "/usr/bin/env",
-            "DIRECT_NVIM=1",
-            "TERM=screen-256color",
-            "nvim",
-        ],
-        RootMode::No,
-    )
-    .await
-}
+async fn populate_envs(args: &Args, is_direct: bool) -> Result<HashMap<&'static str, String>> {
+    let mut envs = HashMap::new();
+    let from_bool = |b| if b { "1".to_string() } else { "0".to_string() };
 
-async fn run_neovim_server_and_attach(
-    config: &Config,
-    dc: &DevContainer,
-    host_port: &str,
-    container_port: &str,
-) -> Result<()> {
-    // Start Neovim server in the container
-    let listen = format!("0.0.0.0:{container_port}");
-    let env = if cfg!(target_os = "macos") {
+    envs.insert("DOCKIM_DIRECT_NVIM", from_bool(is_direct));
+
+    let platform_env = if cfg!(target_os = "macos") {
         "DOCKIM_ON_MACOS"
     } else if cfg!(target_os = "windows")
-        || (exec::capturing_stdout(&["uname", "-a"])
+        || exec::capturing_stdout(&["uname", "-a"])
             .await
-            .is_ok_and(|s| s.contains("Microsoft")))
+            .is_ok_and(|s| s.contains("Microsoft"))
     {
         "DOCKIM_ON_WIN32"
     } else {
         "DOCKIM_ON_LINUX"
     };
-    let nvim = Rc::new(Mutex::new(
-        dc.spawn(
-            &[
-                "/usr/bin/env",
-                &format!("{env}=1"),
-                "nvim",
-                "--headless",
-                "--listen",
-                &listen,
-            ],
-            RootMode::No,
-        )
-        .await?,
-    ));
+    envs.insert(platform_env, from_bool(true));
+
+    envs.insert(
+        "DOCKIM_WORKSPACE_FOLDER",
+        args.resolve_workspace_folder()?.display().to_string(),
+    );
+    envs.insert(
+        "DOCKIM_CONFIG_PATH",
+        args.resolve_config_path()?.display().to_string(),
+    );
+
+    Ok(envs)
+}
+
+fn format_envs_to_invocation(envs: &HashMap<&'static str, String>) -> Vec<String> {
+    let mut result = vec!["/usr/bin/env".to_string()];
+    for (key, value) in envs {
+        result.push(format!("{key}={value}"));
+    }
+    result
+}
+
+async fn run_neovim_directly(dc: &DevContainer, args: &Args) -> Result<()> {
+    let envs = populate_envs(args, true).await?;
+    let mut args = format_envs_to_invocation(&envs);
+    args.push("TERM=screen-256color".to_string());
+    args.push("nvim".to_string());
+    dc.exec(&args, RootMode::No).await
+}
+
+async fn run_neovim_server_and_attach(
+    config: &Config,
+    dc: &DevContainer,
+    args: &Args,
+    host_port: &str,
+    container_port: &str,
+) -> Result<()> {
+    let envs = populate_envs(args, false).await?;
+    let mut args = format_envs_to_invocation(&envs);
+
+    let listen = format!("0.0.0.0:{container_port}");
+    args.push("nvim".to_string());
+    args.push("--headless".to_string());
+    args.push("--listen".to_string());
+    args.push(listen);
+    let nvim = Rc::new(Mutex::new(dc.spawn(&args, RootMode::No).await?));
 
     defer! {
         task::block_in_place(|| {
