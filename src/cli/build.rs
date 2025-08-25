@@ -72,6 +72,7 @@ pub async fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Resul
 async fn install_prerequisites(dc: &DevContainer, _neovim_from_source: bool) -> Result<()> {
     let prerequisites = [
         "zsh",
+        "tmux",
         "curl",
         "fzf",
         "ripgrep",
