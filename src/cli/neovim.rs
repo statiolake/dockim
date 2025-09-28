@@ -17,7 +17,7 @@ use tokio::{
 };
 
 use crate::{
-    cli::{Args, NeovimArgs},
+    cli::{Args, BuildArgs, NeovimArgs},
     config::Config,
     devcontainer::{DevContainer, RootMode},
     exec, log,
@@ -35,6 +35,22 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
     .wrap_err("failed to initialize devcontainer client")?;
 
     dc.up(false, false).await?;
+
+    // Check if Neovim is installed, if not, run build first
+    if dc
+        .exec_capturing_stdout(&["/usr/local/bin/nvim", "--version"], RootMode::No)
+        .await
+        .is_err()
+    {
+        log!("Building": "Neovim not found, running build first");
+        let build_args = BuildArgs {
+            rebuild: false,
+            no_cache: false,
+            neovim_from_source: false,
+            no_async: false,
+        };
+        crate::cli::build::main(config, args, &build_args).await?;
+    }
 
     // Run csrv for clipboard support if exists
     let csrv = if config.remote.use_clipboard_server {
