@@ -16,6 +16,9 @@ on:
         required: false
         default: "Code changes detected"
 
+permissions:
+  id-token: write
+
 jobs:
   analyze-and-update-docs:
     runs-on: ubuntu-latest
