@@ -45,7 +45,7 @@ pub async fn exec<S: AsRef<str> + Debug>(args: &[S]) -> Result<()> {
         .wrap_err("exec failed")?;
     ensure!(status.success(), "Command returned non-successful status",);
 
-    Ok(())
+    reset_terminal().await
 }
 
 pub async fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()> {
@@ -166,4 +166,13 @@ pub async fn capturing<S: AsRef<str> + Debug>(args: &[S]) -> Result<ExecOutput, 
     } else {
         Err(output)
     }
+}
+
+async fn reset_terminal() -> Result<()> {
+    // Try to reset terminal with stty, ignore errors
+    let _ = Command::new("stty")
+        .arg("sane")
+        .status()
+        .await;
+    Ok(())
 }
