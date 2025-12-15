@@ -9,28 +9,47 @@ use tokio::{
     task::JoinHandle,
 };
 
-pub fn spawn_clipboard_server(port: u16) -> (JoinHandle<Result<()>>, oneshot::Sender<()>) {
+pub struct SpawnedInfo {
+    pub handle: JoinHandle<Result<()>>,
+    pub shutdown_tx: oneshot::Sender<()>,
+    pub port: u16,
+}
+
+pub fn spawn_clipboard_server() -> Result<SpawnedInfo> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+    // Find an available port
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .into_diagnostic()
+        .map_err(|e| miette!("Failed to find available port: {}", e))?;
+
+    let bound_port = listener
+        .local_addr()
+        .into_diagnostic()
+        .map_err(|e| miette!("Failed to get bound port: {}", e))?
+        .port();
 
     let handle = tokio::spawn(async move {
         // Populate allowed addresses once at startup
         let allowed_addresses = Arc::new(populate_allowed_addresses());
-        run_server(port, shutdown_rx, allowed_addresses).await
+        run_server_with_listener(listener, shutdown_rx, allowed_addresses).await
     });
 
-    (handle, shutdown_tx)
+    Ok(SpawnedInfo {
+        handle,
+        shutdown_tx,
+        port: bound_port,
+    })
 }
 
-async fn run_server(
-    port: u16,
+async fn run_server_with_listener(
+    listener: std::net::TcpListener,
     mut shutdown_rx: oneshot::Receiver<()>,
     allowed_addresses: Arc<Vec<String>>,
 ) -> Result<()> {
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = TcpListener::bind(&addr)
-        .await
+    let listener = TcpListener::from_std(listener)
         .into_diagnostic()
-        .map_err(|e| miette!("Failed to bind to {}: {}", addr, e))?;
+        .map_err(|e| miette!("Failed to convert listener to async: {}", e))?;
 
     loop {
         tokio::select! {

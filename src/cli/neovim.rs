@@ -11,7 +11,7 @@ use tokio::{process::Child, runtime::Handle, select, signal, sync::Mutex, task, 
 
 use crate::{
     cli::{Args, BuildArgs, NeovimArgs},
-    clipboard,
+    clipboard::{self, SpawnedInfo},
     config::Config,
     devcontainer::{DevContainer, RootMode},
     exec, log,
@@ -47,16 +47,17 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
     }
 
     // Run clipboard server for clipboard support if enabled
-    let clipboard_server = if config.remote.use_clipboard_server {
-        let (handle, shutdown_tx) = clipboard::spawn_clipboard_server(55232);
-        log!("Started": "clipboard server on port 55232");
-        Some((handle, shutdown_tx))
+    let clipboard_spawned_info = if config.remote.use_clipboard_server {
+        let info = clipboard::spawn_clipboard_server()?;
+        log!("Started": "clipboard server on port {}", info.port);
+        Some(info)
     } else {
         None
     };
+    let clipboard_port = clipboard_spawned_info.as_ref().map(|info| info.port);
 
     defer! {
-        if let Some((handle, shutdown_tx)) = clipboard_server {
+        if let Some(SpawnedInfo{handle, shutdown_tx, ..}) = clipboard_spawned_info {
             task::block_in_place(|| {
                 Handle::current().block_on(async move {
                     let _ = shutdown_tx.send(());
@@ -69,7 +70,7 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
 
     if neovim_args.no_remote_ui {
         // Run Neovim in container
-        run_neovim_directly(&dc, args).await
+        run_neovim_directly(&dc, args, clipboard_port).await
     } else {
         // Determine ports (auto-select host port if not specified, container port is always 54321)
         let (host_port, container_port) = if let Some(host_port) = &neovim_args.host_port {
@@ -89,7 +90,7 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
 
         // Run Neovim server in the container and connect to it. Shutdown gracefully on Ctrl+C
         select! {
-            result = run_neovim_server_and_attach(config, &dc, args, &host_port, &container_port) => result,
+            result = run_neovim_server_and_attach(config, &dc, args, &host_port, &container_port, clipboard_port) => result,
             _ = signal::ctrl_c() => {
                 log!("Stopping": "due to received Ctrl+C signal");
                 Ok(())
@@ -98,7 +99,11 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
     }
 }
 
-async fn populate_envs(args: &Args, is_direct: bool) -> Result<HashMap<&'static str, String>> {
+async fn populate_envs(
+    args: &Args,
+    is_direct: bool,
+    clipboard_server_port: Option<u16>,
+) -> Result<HashMap<&'static str, String>> {
     let mut envs = HashMap::new();
     let from_bool = |b| if b { "1".to_string() } else { "0".to_string() };
 
@@ -126,6 +131,10 @@ async fn populate_envs(args: &Args, is_direct: bool) -> Result<HashMap<&'static 
         args.resolve_config_path()?.display().to_string(),
     );
 
+    if let Some(port) = clipboard_server_port {
+        envs.insert("DOCKIM_CLIPBOARD_SERVER_PORT", port.to_string());
+    }
+
     Ok(envs)
 }
 
@@ -137,8 +146,12 @@ fn format_envs_to_invocation(envs: &HashMap<&'static str, String>) -> Vec<String
     result
 }
 
-async fn run_neovim_directly(dc: &DevContainer, args: &Args) -> Result<()> {
-    let envs = populate_envs(args, true).await?;
+async fn run_neovim_directly(
+    dc: &DevContainer,
+    args: &Args,
+    clipboard_server_port: Option<u16>,
+) -> Result<()> {
+    let envs = populate_envs(args, true, clipboard_server_port).await?;
     let mut args = format_envs_to_invocation(&envs);
     args.push("TERM=screen-256color".to_string());
     args.push("nvim".to_string());
@@ -151,8 +164,9 @@ async fn run_neovim_server_and_attach(
     args: &Args,
     host_port: &str,
     container_port: &str,
+    clipboard_server_port: Option<u16>,
 ) -> Result<()> {
-    let envs = populate_envs(args, false).await?;
+    let envs = populate_envs(args, false, clipboard_server_port).await?;
     let mut args = format_envs_to_invocation(&envs);
 
     let listen = format!("0.0.0.0:{container_port}");
