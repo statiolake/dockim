@@ -1,4 +1,4 @@
-use std::{env, process::Stdio, sync::Arc};
+use std::{env, process::Stdio, sync::{Arc, Mutex}, time::Duration};
 
 use miette::{miette, IntoDiagnostic, Result};
 use tokio::{
@@ -17,9 +17,34 @@ pub struct SpawnedInfo {
 
 pub fn spawn_clipboard_server() -> Result<SpawnedInfo> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let port = Arc::new(Mutex::new(0u16));
+    let port_clone = Arc::clone(&port);
 
-    // Find an available port
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+    let handle = tokio::spawn(async move {
+        // Populate allowed addresses once at startup
+        let allowed_addresses = Arc::new(populate_allowed_addresses());
+        run_server(shutdown_rx, allowed_addresses, port_clone).await
+    });
+
+    // Give the server a moment to bind and store the port
+    std::thread::sleep(Duration::from_millis(100));
+    let bound_port = *port.lock().unwrap();
+
+    Ok(SpawnedInfo {
+        handle,
+        shutdown_tx,
+        port: bound_port,
+    })
+}
+
+async fn run_server(
+    mut shutdown_rx: oneshot::Receiver<()>,
+    allowed_addresses: Arc<Vec<String>>,
+    port: Arc<Mutex<u16>>,
+) -> Result<()> {
+    // Bind to port 0 to let OS choose an available port
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
         .into_diagnostic()
         .map_err(|e| miette!("Failed to find available port: {}", e))?;
 
@@ -29,27 +54,8 @@ pub fn spawn_clipboard_server() -> Result<SpawnedInfo> {
         .map_err(|e| miette!("Failed to get bound port: {}", e))?
         .port();
 
-    let handle = tokio::spawn(async move {
-        // Populate allowed addresses once at startup
-        let allowed_addresses = Arc::new(populate_allowed_addresses());
-        run_server_with_listener(listener, shutdown_rx, allowed_addresses).await
-    });
-
-    Ok(SpawnedInfo {
-        handle,
-        shutdown_tx,
-        port: bound_port,
-    })
-}
-
-async fn run_server_with_listener(
-    listener: std::net::TcpListener,
-    mut shutdown_rx: oneshot::Receiver<()>,
-    allowed_addresses: Arc<Vec<String>>,
-) -> Result<()> {
-    let listener = TcpListener::from_std(listener)
-        .into_diagnostic()
-        .map_err(|e| miette!("Failed to convert listener to async: {}", e))?;
+    // Store the port for the spawner to read
+    *port.lock().unwrap() = bound_port;
 
     loop {
         tokio::select! {

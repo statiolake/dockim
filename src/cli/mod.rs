@@ -6,6 +6,7 @@ use crate::config::Config;
 
 pub mod bash;
 pub mod build;
+pub mod clipboard_server;
 pub mod down;
 pub mod exec;
 pub mod init;
@@ -122,6 +123,9 @@ pub enum Subcommand {
 
     #[clap(alias = "p", about = "Manage port forwarding")]
     Port(PortArgs),
+
+    #[clap(about = "Start clipboard server for clipboard support")]
+    ClipboardServer(ClipboardServerArgs),
 }
 
 #[derive(Debug, Clone)]
@@ -247,3 +251,6 @@ pub struct PortLsArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct StopArgs {}
+
+#[derive(Debug, clap::Parser)]
+pub struct ClipboardServerArgs {}
