@@ -1,26 +1,29 @@
-use std::io::Write;
 use miette::{IntoDiagnostic, Result};
 use tokio::signal;
 
 use crate::{
-    clipboard,
-    cli::ClipboardServerArgs,
-    config::Config,
-    cli::Args,
-    log,
+    cli::Args, cli::ClipboardServerArgs, clipboard, config::Config, devcontainer::DevContainer, log,
 };
 
-pub async fn main(_config: &Config, _args: &Args, _clipboard_server_args: &ClipboardServerArgs) -> Result<()> {
+pub async fn main(
+    _config: &Config,
+    args: &Args,
+    _clipboard_server_args: &ClipboardServerArgs,
+) -> Result<()> {
+    // Create a DevContainer instance to find an available port
+    let dc = DevContainer::new(
+        args.resolve_workspace_folder()?,
+        args.resolve_config_path()?,
+    )?;
+
+    // Find an available port
+    let clipboard_port = dc.find_available_host_port().await?;
+
     // Spawn clipboard server
-    let info = clipboard::spawn_clipboard_server()?;
+    let info = clipboard::spawn_clipboard_server(clipboard_port).await?;
 
     log!("Started": "clipboard server on port {}", info.port);
-    println!("Clipboard server is running on port {}", info.port);
     println!("Press Ctrl+C to stop");
-
-    // Print the port for easy access
-    print!("DOCKIM_CLIPBOARD_SERVER_PORT={}\n", info.port);
-    let _ = std::io::stdout().flush();
 
     // Wait for Ctrl+C signal
     signal::ctrl_c().await.into_diagnostic()?;

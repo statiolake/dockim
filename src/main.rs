@@ -1,8 +1,8 @@
 use clap::Parser;
 use dockim::{
     cli::{
-        bash, build, clipboard_server, down, exec as cli_exec, init, init_config, init_docker, neovim, port, shell,
-        stop, up, Args, Subcommand,
+        bash, build, clipboard_server, down, exec as cli_exec, init, init_config, init_docker,
+        neovim, port, shell, stop, up, Args, Subcommand,
     },
     config::Config,
     devcontainer::DevContainer,
@@ -33,7 +33,9 @@ async fn main() -> Result<()> {
         Subcommand::Port(port_args) => port::main(&config, &args, port_args).await,
         Subcommand::Stop(stop_args) => stop::main(&config, &args, stop_args).await,
         Subcommand::Down(down_args) => down::main(&config, &args, down_args).await,
-        Subcommand::ClipboardServer(clipboard_server_args) => clipboard_server::main(&config, &args, clipboard_server_args).await,
+        Subcommand::ClipboardServer(clipboard_server_args) => {
+            clipboard_server::main(&config, &args, clipboard_server_args).await
+        }
     }
 }
 

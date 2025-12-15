@@ -7,10 +7,10 @@ use std::{
     collections::HashMap,
     fs::{self, File},
     io::Write,
-    net::TcpListener,
     path::{Path, PathBuf},
     process::Stdio,
 };
+use tokio::net::TcpListener;
 
 use tar;
 use tempfile::{NamedTempFile, TempPath};
@@ -480,13 +480,13 @@ impl DevContainer {
         Ok(())
     }
 
-    pub fn find_available_host_port(&self) -> Result<u16> {
+    pub async fn find_available_host_port(&self) -> Result<u16> {
         let mut rng = rand::rng();
 
         // Try random ports up to 1000 times
         for _ in 0..1000 {
             let port = rng.random_range(50000..60000);
-            if self.is_host_port_available(port) {
+            if self.is_host_port_available(port).await {
                 return Ok(port);
             }
         }
@@ -496,8 +496,8 @@ impl DevContainer {
         ))
     }
 
-    fn is_host_port_available(&self, port: u16) -> bool {
-        TcpListener::bind(("127.0.0.1", port)).is_ok()
+    async fn is_host_port_available(&self, port: u16) -> bool {
+        TcpListener::bind(("127.0.0.1", port)).await.is_ok()
     }
 
     async fn socat_container_name(&self, host_port: &str) -> Result<String> {

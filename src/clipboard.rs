@@ -1,4 +1,4 @@
-use std::{env, process::Stdio, sync::{Arc, Mutex}, time::Duration};
+use std::{env, process::Stdio, sync::Arc};
 
 use miette::{miette, IntoDiagnostic, Result};
 use tokio::{
@@ -15,47 +15,32 @@ pub struct SpawnedInfo {
     pub port: u16,
 }
 
-pub fn spawn_clipboard_server() -> Result<SpawnedInfo> {
+pub async fn spawn_clipboard_server(port: u16) -> Result<SpawnedInfo> {
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let port = Arc::new(Mutex::new(0u16));
-    let port_clone = Arc::clone(&port);
 
     let handle = tokio::spawn(async move {
         // Populate allowed addresses once at startup
         let allowed_addresses = Arc::new(populate_allowed_addresses());
-        run_server(shutdown_rx, allowed_addresses, port_clone).await
+        run_server(shutdown_rx, allowed_addresses, port).await
     });
-
-    // Give the server a moment to bind and store the port
-    std::thread::sleep(Duration::from_millis(100));
-    let bound_port = *port.lock().unwrap();
 
     Ok(SpawnedInfo {
         handle,
         shutdown_tx,
-        port: bound_port,
+        port,
     })
 }
 
 async fn run_server(
     mut shutdown_rx: oneshot::Receiver<()>,
     allowed_addresses: Arc<Vec<String>>,
-    port: Arc<Mutex<u16>>,
+    port: u16,
 ) -> Result<()> {
-    // Bind to port 0 to let OS choose an available port
-    let listener = TcpListener::bind("127.0.0.1:0")
+    // Bind to the specified port
+    let listener = TcpListener::bind(("127.0.0.1", port))
         .await
         .into_diagnostic()
-        .map_err(|e| miette!("Failed to find available port: {}", e))?;
-
-    let bound_port = listener
-        .local_addr()
-        .into_diagnostic()
-        .map_err(|e| miette!("Failed to get bound port: {}", e))?
-        .port();
-
-    // Store the port for the spawner to read
-    *port.lock().unwrap() = bound_port;
+        .map_err(|e| miette!("Failed to bind to port {}: {}", port, e))?;
 
     loop {
         tokio::select! {

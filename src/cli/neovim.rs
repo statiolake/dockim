@@ -48,7 +48,8 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
 
     // Run clipboard server for clipboard support if enabled
     let clipboard_spawned_info = if config.remote.use_clipboard_server {
-        let info = clipboard::spawn_clipboard_server()?;
+        let clipboard_port = dc.find_available_host_port().await?;
+        let info = clipboard::spawn_clipboard_server(clipboard_port).await?;
         log!("Started": "clipboard server on port {}", info.port);
         Some(info)
     } else {
@@ -83,7 +84,7 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
                     .to_string(),
             )
         } else {
-            let auto_host_port = dc.find_available_host_port()?;
+            let auto_host_port = dc.find_available_host_port().await?;
             println!("Auto-selected host port: {auto_host_port}");
             (auto_host_port.to_string(), "54321".to_string())
         };
@@ -132,7 +133,8 @@ async fn populate_envs(
     );
 
     if let Some(port) = clipboard_server_port {
-        envs.insert("DOCKIM_CLIPBOARD_SERVER_PORT", port.to_string());
+        envs.insert("CCLI_HOST", "host.docker.internal".to_string());
+        envs.insert("CCLI_PORT", port.to_string());
     }
 
     Ok(envs)
