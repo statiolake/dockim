@@ -77,7 +77,7 @@ impl DevContainer {
     }
 
     pub fn new(workspace_folder: PathBuf, config_path: PathBuf) -> Result<Self> {
-        let overriden_config = generate_overriden_config_paths(&config_path)?;
+        let overriden_config = generate_overriden_config_paths(&workspace_folder, &config_path)?;
 
         Ok(DevContainer {
             workspace_folder,
@@ -650,9 +650,12 @@ struct OverridenConfigPaths {
 /// Generate override config file contents to achieve various useful features:
 /// - Root user execution in container without sudo installation
 /// - host.docker.internal on Linux
-fn generate_overriden_config_paths(config_path: &Path) -> Result<OverridenConfigPaths> {
+fn generate_overriden_config_paths(
+    workspace_folder: &Path,
+    config_path: &Path,
+) -> Result<OverridenConfigPaths> {
     // devcontainer.json
-    let compose_yaml = generate_overriden_compose_yaml(config_path)
+    let compose_yaml = generate_overriden_compose_yaml(workspace_folder, config_path)
         .wrap_err("failed to generate temporary docker-compose overrides")?
         .map(|f| f.into_temp_path());
     let devcontainer_json =
@@ -767,7 +770,10 @@ fn generate_overriden_root_devcontainer_json(
     Ok(overriden_file)
 }
 
-fn generate_overriden_compose_yaml(config_path: &Path) -> Result<Option<NamedTempFile>> {
+fn generate_overriden_compose_yaml(
+    workspace_folder: &Path,
+    config_path: &Path,
+) -> Result<Option<NamedTempFile>> {
     let devcontainer_json_value =
         load_devcontainer_json(config_path).wrap_err("failed to load devcontainer.json")?;
 
@@ -794,7 +800,12 @@ fn generate_overriden_compose_yaml(config_path: &Path) -> Result<Option<NamedTem
                 )
             })?;
 
-            let path = if Path::new(path).is_absolute() {
+            let path = path.replace(
+                "${localWorkspaceFolder}",
+                &workspace_folder.to_string_lossy(),
+            );
+
+            let path = if Path::new(&path).is_absolute() {
                 PathBuf::from(path)
             } else {
                 config_dir.join(path)

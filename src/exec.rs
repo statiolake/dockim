@@ -170,9 +170,6 @@ pub async fn capturing<S: AsRef<str> + Debug>(args: &[S]) -> Result<ExecOutput, 
 
 async fn reset_terminal() -> Result<()> {
     // Try to reset terminal with stty, ignore errors
-    let _ = Command::new("stty")
-        .arg("sane")
-        .status()
-        .await;
+    let _ = Command::new("stty").arg("sane").status().await;
     Ok(())
 }
