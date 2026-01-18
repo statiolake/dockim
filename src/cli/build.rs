@@ -23,7 +23,7 @@ pub async fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Resul
     );
 
     dc.up(build_args.rebuild, build_args.no_cache).await?;
-    let up_cont = dc.up_and_inspect().await?;
+    let up_cont = dc.inspect().await?;
 
     install_prerequisites(&dc, build_args.neovim_from_source).await?;
 

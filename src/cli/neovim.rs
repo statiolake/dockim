@@ -208,7 +208,7 @@ async fn run_neovim_client_with_retry(
 ) -> Result<()> {
     // Prepare execution arguments
     let server = format!("localhost:{host_port}");
-    let up_output = dc.up_and_inspect().await?;
+    let up_output = dc.inspect().await?;
     let mut args = config.remote.get_args();
     for arg in &mut args {
         *arg = arg
