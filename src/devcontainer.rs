@@ -120,9 +120,21 @@ impl DevContainer {
             return Ok(cached.clone());
         }
 
-        let config = get_compose_config(&self.workspace_folder, &self.config_path)?
-            .ok_or_else(|| miette!("This devcontainer does not use docker-compose"))?;
+        let result = if let Some(config) = get_compose_config(&self.workspace_folder, &self.config_path)? {
+            // Compose-based devcontainer
+            self.inspect_compose_container(config).await?
+        } else {
+            // Non-compose devcontainer (using image or dockerfile)
+            self.inspect_non_compose_container().await?
+        };
 
+        // Cache the result
+        *self.cached_up_output.lock().await = Some(result.clone());
+        Ok(result)
+    }
+
+    /// Inspect compose-based devcontainer
+    async fn inspect_compose_container(&self, config: ComposeConfig) -> Result<UpOutput> {
         // Find container by project and service labels
         let project_filter = format!("label=com.docker.compose.project={}", config.project_name);
         let service_filter = format!("label=com.docker.compose.service={}", config.service_name);
@@ -148,28 +160,82 @@ impl DevContainer {
         let remote_user = if let Some(user) = config.remote_user {
             user
         } else {
-            // Try to get from devcontainer.metadata label or fall back to inspecting the container
-            let user_output = exec::capturing_stdout(&[
-                "docker",
-                "exec",
-                &container_id,
-                "whoami",
-            ])
-            .await
-            .unwrap_or_else(|_| "root".to_string());
-            user_output.trim().to_string()
+            self.get_container_user(&container_id).await?
         };
 
-        let result = UpOutput {
+        Ok(UpOutput {
             outcome: "success".to_string(),
             container_id,
             remote_user,
             remote_workspace_folder: config.workspace_folder,
+        })
+    }
+
+    /// Inspect non-compose devcontainer (using image or dockerfile)
+    async fn inspect_non_compose_container(&self) -> Result<UpOutput> {
+        let devcontainer_json = load_devcontainer_json(&self.config_path)?;
+
+        // Find container by devcontainer.local_folder label
+        // devcontainer CLI adds this label to containers it creates
+        let workspace_folder_str = self.workspace_folder.to_string_lossy();
+        let folder_filter = format!("label=devcontainer.local_folder={}", workspace_folder_str);
+
+        let output = exec::capturing_stdout(&[
+            "docker",
+            "ps",
+            "-q",
+            "--filter",
+            &folder_filter,
+        ])
+        .await
+        .wrap_err("failed to find devcontainer")?;
+
+        let container_id = output
+            .lines()
+            .next()
+            .ok_or_else(|| miette!("No running devcontainer found for workspace '{}'", workspace_folder_str))?
+            .to_string();
+
+        // Get remote user from config or container
+        let remote_user = if let Some(user) = devcontainer_json["remoteUser"].as_str() {
+            user.to_string()
+        } else {
+            self.get_container_user(&container_id).await.unwrap_or_else(|_| "root".to_string())
         };
 
-        // Cache the result
-        *self.cached_up_output.lock().await = Some(result.clone());
-        Ok(result)
+        // Get workspace folder from config
+        let remote_workspace_folder = devcontainer_json["workspaceFolder"]
+            .as_str()
+            .or_else(|| devcontainer_json["workspaceMount"]
+                .as_str()
+                .and_then(|mount| {
+                    // Parse workspaceMount to extract target path
+                    // Format: "source=...,target=/workspaces/..."
+                    mount.split(',')
+                        .find_map(|part| part.trim().strip_prefix("target="))
+                }))
+            .unwrap_or("/workspaces")
+            .to_string();
+
+        Ok(UpOutput {
+            outcome: "success".to_string(),
+            container_id,
+            remote_user,
+            remote_workspace_folder,
+        })
+    }
+
+    /// Get the user running in the container
+    async fn get_container_user(&self, container_id: &str) -> Result<String> {
+        let user_output = exec::capturing_stdout(&[
+            "docker",
+            "exec",
+            container_id,
+            "whoami",
+        ])
+        .await
+        .unwrap_or_else(|_| "root".to_string());
+        Ok(user_output.trim().to_string())
     }
 
     /// Get compose project name without running devcontainer up
@@ -196,38 +262,53 @@ impl DevContainer {
     }
 
     pub async fn stop(&self) -> Result<()> {
-        let project_name = self
-            .get_compose_project_name()?
-            .ok_or_else(|| miette!("This devcontainer does not use docker-compose"))?;
+        if let Some(project_name) = self.get_compose_project_name()? {
+            // Compose-based devcontainer
+            let containers = self.find_compose_containers(&project_name).await?;
+            if containers.is_empty() {
+                log!("Info": "No running containers found for compose project '{}'", project_name);
+                return Ok(());
+            }
 
-        let containers = self.find_compose_containers(&project_name).await?;
-        if containers.is_empty() {
-            log!("Info": "No running containers found for compose project '{}'", project_name);
-            return Ok(());
+            exec::exec(&["docker", "compose", "-p", &project_name, "stop"])
+                .await
+                .wrap_err("failed to stop docker compose stack")?;
+        } else {
+            // Non-compose devcontainer
+            let up_output = self.inspect().await?;
+            exec::exec(&["docker", "stop", &up_output.container_id])
+                .await
+                .wrap_err("failed to stop container")?;
         }
 
-        exec::exec(&["docker", "compose", "-p", &project_name, "stop"])
-            .await
-            .wrap_err("failed to stop docker compose stack")?;
         // Clear cache after stopping container
         *self.cached_up_output.lock().await = None;
         Ok(())
     }
 
     pub async fn down(&self) -> Result<()> {
-        let project_name = self
-            .get_compose_project_name()?
-            .ok_or_else(|| miette!("This devcontainer does not use docker-compose"))?;
+        if let Some(project_name) = self.get_compose_project_name()? {
+            // Compose-based devcontainer
+            let containers = self.find_compose_containers(&project_name).await?;
+            if containers.is_empty() {
+                log!("Info": "No containers found for compose project '{}'", project_name);
+                return Ok(());
+            }
 
-        let containers = self.find_compose_containers(&project_name).await?;
-        if containers.is_empty() {
-            log!("Info": "No containers found for compose project '{}'", project_name);
-            return Ok(());
+            exec::exec(&["docker", "compose", "-p", &project_name, "down"])
+                .await
+                .wrap_err("failed to down docker compose stack")?;
+        } else {
+            // Non-compose devcontainer
+            let up_output = self.inspect().await?;
+            exec::exec(&["docker", "stop", &up_output.container_id])
+                .await
+                .wrap_err("failed to stop container")?;
+            exec::exec(&["docker", "rm", &up_output.container_id])
+                .await
+                .wrap_err("failed to remove container")?;
         }
 
-        exec::exec(&["docker", "compose", "-p", &project_name, "down"])
-            .await
-            .wrap_err("failed to down docker compose stack")?;
         // Clear cache after removing container
         *self.cached_up_output.lock().await = None;
         Ok(())
