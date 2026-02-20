@@ -43,6 +43,15 @@ pub struct ForwardedPort {
 }
 
 #[derive(Debug, Clone)]
+pub struct ComposeContainerInfo {
+    pub id: String,
+    pub name: String,
+    pub service: Option<String>,
+    pub status: String,
+    pub image: String,
+}
+
+#[derive(Debug, Clone)]
 pub enum ContainerFileDestination {
     /// Absolute path from container root
     Root(String),
@@ -178,6 +187,24 @@ impl DevContainer {
         compute_compose_project_name(&self.workspace_folder, &self.config_path)
     }
 
+    pub fn compose_project_name(&self) -> Result<Option<String>> {
+        self.get_compose_project_name()
+    }
+
+    pub fn compose_file_paths(&self) -> Result<Option<Vec<PathBuf>>> {
+        let devcontainer_json = load_devcontainer_json(&self.config_path)?;
+        resolve_compose_file_paths(
+            &devcontainer_json,
+            &self.workspace_folder,
+            &self.config_path,
+        )
+    }
+
+    pub fn compose_service_name(&self) -> Result<Option<String>> {
+        let devcontainer_json = load_devcontainer_json(&self.config_path)?;
+        Ok(devcontainer_json["service"].as_str().map(|s| s.to_string()))
+    }
+
     /// Find containers belonging to a compose project
     async fn find_compose_containers(&self, project_name: &str) -> Result<Vec<String>> {
         let project_filter = format!("label=com.docker.compose.project={}", project_name);
@@ -194,6 +221,48 @@ impl DevContainer {
         .wrap_err("failed to list compose containers")?;
 
         Ok(output.lines().map(|s| s.to_string()).collect())
+    }
+
+    pub async fn list_compose_containers(
+        &self,
+        project_name: &str,
+    ) -> Result<Vec<ComposeContainerInfo>> {
+        let project_filter = format!("label=com.docker.compose.project={project_name}");
+        let output = exec::capturing_stdout(&[
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            &project_filter,
+            "--format",
+            "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.service\"}}\t{{.Status}}\t{{.Image}}",
+        ])
+        .await
+        .wrap_err("failed to list compose containers")?;
+
+        Ok(output
+            .lines()
+            .filter_map(|line| {
+                let mut columns = line.splitn(5, '\t');
+                let id = columns.next()?;
+                let name = columns.next()?;
+                let service = columns.next().unwrap_or_default();
+                let status = columns.next().unwrap_or_default();
+                let image = columns.next().unwrap_or_default();
+
+                Some(ComposeContainerInfo {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    service: if service.is_empty() {
+                        None
+                    } else {
+                        Some(service.to_string())
+                    },
+                    status: status.to_string(),
+                    image: image.to_string(),
+                })
+            })
+            .collect())
     }
 
     pub async fn stop(&self) -> Result<()> {
@@ -779,6 +848,53 @@ fn normalize_path(path: &Path) -> PathBuf {
     normalized
 }
 
+fn resolve_compose_file_paths(
+    devcontainer_json: &Value,
+    workspace_folder: &Path,
+    config_path: &Path,
+) -> Result<Option<Vec<PathBuf>>> {
+    let docker_compose_paths = devcontainer_json["dockerComposeFile"]
+        .as_array()
+        .cloned()
+        .or_else(|| {
+            devcontainer_json["dockerComposeFile"]
+                .as_str()
+                .map(|s| vec![Value::String(s.into())])
+        });
+
+    let Some(docker_compose_paths) = docker_compose_paths else {
+        return Ok(None);
+    };
+
+    if docker_compose_paths.is_empty() {
+        return Ok(None);
+    }
+
+    let config_dir = normalize_path(config_path.parent().unwrap_or(Path::new(".")));
+    let compose_paths = docker_compose_paths
+        .iter()
+        .map(|path| {
+            let path = path
+                .as_str()
+                .ok_or_else(|| miette!("failed to parse compose file path"))?;
+
+            let path = path.replace(
+                "${localWorkspaceFolder}",
+                &workspace_folder.to_string_lossy(),
+            );
+
+            let path = if Path::new(&path).is_absolute() {
+                PathBuf::from(path)
+            } else {
+                config_dir.join(path)
+            };
+            Ok(normalize_path(&path))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(Some(compose_paths))
+}
+
 /// Compute the docker-compose project name using the same logic as devcontainer CLI
 /// Returns None if this devcontainer doesn't use docker-compose
 fn compute_compose_project_name(
@@ -810,47 +926,12 @@ fn compute_compose_project_name(
     }
 
     let devcontainer_json = load_devcontainer_json(config_path)?;
-
-    // Check if dockerComposeFile is specified
-    let docker_compose_paths = devcontainer_json["dockerComposeFile"]
-        .as_array()
-        .cloned()
-        .or_else(|| {
-            devcontainer_json["dockerComposeFile"]
-                .as_str()
-                .map(|s| vec![Value::String(s.into())])
-        });
-
-    let Some(docker_compose_paths) = docker_compose_paths else {
-        // Not using docker-compose
+    let Some(compose_paths) =
+        resolve_compose_file_paths(&devcontainer_json, workspace_folder, config_path)?
+    else {
         return Ok(None);
     };
-
-    if docker_compose_paths.is_empty() {
-        return Ok(None);
-    }
-
     let config_dir = normalize_path(config_path.parent().unwrap_or(Path::new(".")));
-    let compose_paths = docker_compose_paths
-        .iter()
-        .map(|path| {
-            let path = path
-                .as_str()
-                .ok_or_else(|| miette!("failed to parse compose file path"))?;
-
-            let path = path.replace(
-                "${localWorkspaceFolder}",
-                &workspace_folder.to_string_lossy(),
-            );
-
-            let path = if Path::new(&path).is_absolute() {
-                PathBuf::from(path)
-            } else {
-                config_dir.join(path)
-            };
-            Ok(normalize_path(&path))
-        })
-        .collect::<Result<Vec<_>>>()?;
 
     // In compose file arrays, later files override earlier files.
     let mut compose_name = None;
@@ -1044,45 +1125,18 @@ fn generate_overriden_compose_yaml(
 ) -> Result<Option<NamedTempFile>> {
     let devcontainer_json_value =
         load_devcontainer_json(config_path).wrap_err("failed to load devcontainer.json")?;
-
-    let Some(docker_compose_paths) = devcontainer_json_value["dockerComposeFile"]
-        .as_array()
-        .cloned()
-        .or_else(|| {
-            devcontainer_json_value["dockerComposeFile"]
-                .as_str()
-                .map(|s| vec![Value::String(s.into())])
-        })
+    let Some(compose_paths) =
+        resolve_compose_file_paths(&devcontainer_json_value, workspace_folder, config_path)?
     else {
         return Ok(None);
     };
 
-    let config_dir = config_path.parent().unwrap_or(Path::new("."));
-    let services: Vec<_> = docker_compose_paths
-        .iter()
+    let services: Vec<_> = compose_paths
+        .into_iter()
         .map(|path| {
-            let path = path.as_str().ok_or_else(|| {
-                miette!(
-                    "failed to parse compose file's path in {}",
-                    config_path.display()
-                )
-            })?;
-
-            let path = path.replace(
-                "${localWorkspaceFolder}",
-                &workspace_folder.to_string_lossy(),
-            );
-
-            let path = if Path::new(&path).is_absolute() {
-                PathBuf::from(path)
-            } else {
-                config_dir.join(path)
-            };
-
             if !path.exists() {
                 return Err(miette!("compose file '{}' does not exist", path.display()));
             }
-
             Ok(path)
         })
         .collect::<Result<Vec<_>>>()?

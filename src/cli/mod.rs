@@ -14,6 +14,7 @@ pub mod init_config;
 pub mod init_docker;
 pub mod neovim;
 pub mod port;
+pub mod ps;
 pub mod shell;
 pub mod stop;
 pub mod up;
@@ -123,6 +124,9 @@ pub enum Subcommand {
 
     #[clap(alias = "p", about = "Manage port forwarding")]
     Port(PortArgs),
+
+    #[clap(about = "Show resolved devcontainer/compose status")]
+    Ps(PsArgs),
 
     #[clap(about = "Start clipboard server for clipboard support")]
     ClipboardServer(ClipboardServerArgs),
@@ -251,6 +255,9 @@ pub struct PortLsArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct StopArgs {}
+
+#[derive(Debug, clap::Parser)]
+pub struct PsArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct ClipboardServerArgs {}
