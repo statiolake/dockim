@@ -205,40 +205,59 @@ impl DevContainer {
         Ok(devcontainer_json["service"].as_str().map(|s| s.to_string()))
     }
 
-    /// Find containers belonging to a compose project
-    async fn find_compose_containers(&self, project_name: &str) -> Result<Vec<String>> {
-        let project_filter = format!("label=com.docker.compose.project={}", project_name);
-        let output = exec::capturing_stdout(&[
-            "docker",
-            "ps",
-            "-a",
-            "--filter",
-            &project_filter,
-            "--format",
-            "{{.ID}}",
-        ])
-        .await
-        .wrap_err("failed to list compose containers")?;
+    fn devcontainer_label_filters(&self) -> Vec<String> {
+        let workspace_folder = normalize_path(&self.workspace_folder);
+        let config_path = normalize_path(&self.config_path);
+        vec![
+            format!(
+                "label=devcontainer.local_folder={}",
+                workspace_folder.display()
+            ),
+            format!("label=devcontainer.config_file={}", config_path.display()),
+        ]
+    }
+
+    async fn find_containers_by_filters(
+        &self,
+        filters: &[String],
+        all: bool,
+    ) -> Result<Vec<String>> {
+        let mut args = vec!["docker".to_string(), "ps".to_string()];
+        if all {
+            args.push("-a".to_string());
+        }
+        for filter in filters {
+            args.push("--filter".to_string());
+            args.push(filter.clone());
+        }
+        args.push("--format".to_string());
+        args.push("{{.ID}}".to_string());
+
+        let output = exec::capturing_stdout(&args)
+            .await
+            .wrap_err("failed to list containers")?;
 
         Ok(output.lines().map(|s| s.to_string()).collect())
     }
 
-    pub async fn list_compose_containers(
+    async fn list_containers_by_filters(
         &self,
-        project_name: &str,
+        filters: &[String],
     ) -> Result<Vec<ComposeContainerInfo>> {
-        let project_filter = format!("label=com.docker.compose.project={project_name}");
-        let output = exec::capturing_stdout(&[
-            "docker",
-            "ps",
-            "-a",
-            "--filter",
-            &project_filter,
-            "--format",
-            "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.service\"}}\t{{.Status}}\t{{.Image}}",
-        ])
-        .await
-        .wrap_err("failed to list compose containers")?;
+        let mut args = vec!["docker".to_string(), "ps".to_string(), "-a".to_string()];
+        for filter in filters {
+            args.push("--filter".to_string());
+            args.push(filter.clone());
+        }
+        args.push("--format".to_string());
+        args.push(
+            "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.service\"}}\t{{.Status}}\t{{.Image}}"
+                .to_string(),
+        );
+
+        let output = exec::capturing_stdout(&args)
+            .await
+            .wrap_err("failed to list containers")?;
 
         Ok(output
             .lines()
@@ -265,39 +284,181 @@ impl DevContainer {
             .collect())
     }
 
-    pub async fn stop(&self) -> Result<()> {
-        let project_name = self
-            .get_compose_project_name()?
-            .ok_or_else(|| miette!("This devcontainer does not use docker-compose"))?;
-
-        let containers = self.find_compose_containers(&project_name).await?;
-        if containers.is_empty() {
-            log!("Info": "No running containers found for compose project '{}'", project_name);
-            return Ok(());
+    async fn list_containers_by_ids(&self, ids: &[String]) -> Result<Vec<ComposeContainerInfo>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
         }
 
-        exec::exec(&["docker", "compose", "-p", &project_name, "stop"])
+        let mut args = vec!["docker".to_string(), "ps".to_string(), "-a".to_string()];
+        for id in ids {
+            args.push("--filter".to_string());
+            args.push(format!("id={id}"));
+        }
+        args.push("--format".to_string());
+        args.push(
+            "{{.ID}}\t{{.Names}}\t{{.Label \"com.docker.compose.service\"}}\t{{.Status}}\t{{.Image}}"
+                .to_string(),
+        );
+
+        let output = exec::capturing_stdout(&args)
             .await
-            .wrap_err("failed to stop docker compose stack")?;
+            .wrap_err("failed to list containers")?;
+
+        Ok(output
+            .lines()
+            .filter_map(|line| {
+                let mut columns = line.splitn(5, '\t');
+                let id = columns.next()?;
+                let name = columns.next()?;
+                let service = columns.next().unwrap_or_default();
+                let status = columns.next().unwrap_or_default();
+                let image = columns.next().unwrap_or_default();
+
+                Some(ComposeContainerInfo {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    service: if service.is_empty() {
+                        None
+                    } else {
+                        Some(service.to_string())
+                    },
+                    status: status.to_string(),
+                    image: image.to_string(),
+                })
+            })
+            .collect())
+    }
+
+    async fn container_has_config_file_label(&self, container_id: &str) -> Result<bool> {
+        let output = exec::capturing_stdout(&[
+            "docker",
+            "inspect",
+            "--format",
+            "{{index .Config.Labels \"devcontainer.config_file\"}}",
+            container_id,
+        ])
+        .await
+        .wrap_err("failed to inspect container labels")?;
+
+        let value = output.trim();
+        Ok(!value.is_empty() && value != "<no value>")
+    }
+
+    /// Find containers belonging to a compose project
+    async fn find_compose_containers(&self, project_name: &str) -> Result<Vec<String>> {
+        let project_filter = format!("label=com.docker.compose.project={project_name}");
+        self.find_containers_by_filters(&[project_filter], true)
+            .await
+    }
+
+    async fn find_non_compose_containers(&self, all: bool) -> Result<Vec<String>> {
+        let new_label_containers = self
+            .find_containers_by_filters(&self.devcontainer_label_filters(), all)
+            .await
+            .wrap_err("failed to find containers using new devcontainer labels")?;
+        if !new_label_containers.is_empty() {
+            return Ok(new_label_containers);
+        }
+
+        // Keep compatibility with older containers that only had devcontainer.local_folder.
+        let workspace_folder = normalize_path(&self.workspace_folder);
+        let old_label_filter = format!(
+            "label=devcontainer.local_folder={}",
+            workspace_folder.display()
+        );
+        let old_label_containers = self
+            .find_containers_by_filters(&[old_label_filter], all)
+            .await
+            .wrap_err("failed to find containers using old devcontainer labels")?;
+
+        let mut old_containers_without_config_label = Vec::new();
+        for container_id in old_label_containers {
+            if !self
+                .container_has_config_file_label(&container_id)
+                .await
+                .wrap_err("failed to check old devcontainer labels")?
+            {
+                old_containers_without_config_label.push(container_id);
+            }
+        }
+
+        Ok(old_containers_without_config_label)
+    }
+
+    pub async fn list_compose_containers(
+        &self,
+        project_name: &str,
+    ) -> Result<Vec<ComposeContainerInfo>> {
+        let project_filter = format!("label=com.docker.compose.project={project_name}");
+        self.list_containers_by_filters(&[project_filter]).await
+    }
+
+    pub async fn list_non_compose_containers(&self) -> Result<Vec<ComposeContainerInfo>> {
+        let container_ids = self.find_non_compose_containers(true).await?;
+        self.list_containers_by_ids(&container_ids).await
+    }
+
+    pub async fn stop(&self) -> Result<()> {
+        if let Some(project_name) = self.get_compose_project_name()? {
+            let containers = self.find_compose_containers(&project_name).await?;
+            if containers.is_empty() {
+                log!("Info": "No running containers found for compose project '{}'", project_name);
+                return Ok(());
+            }
+
+            exec::exec(&["docker", "compose", "-p", &project_name, "stop"])
+                .await
+                .wrap_err("failed to stop docker compose stack")?;
+        } else {
+            let containers = self.find_non_compose_containers(false).await?;
+            if containers.is_empty() {
+                log!(
+                    "Info": "No running containers found for config '{}'",
+                    self.config_path.display()
+                );
+                return Ok(());
+            }
+
+            let mut args = vec!["docker".to_string(), "stop".to_string()];
+            args.extend(containers);
+            exec::exec(&args)
+                .await
+                .wrap_err("failed to stop devcontainer container(s)")?;
+        }
+
         // Clear cache after stopping container
         *self.cached_up_output.lock().await = None;
         Ok(())
     }
 
     pub async fn down(&self) -> Result<()> {
-        let project_name = self
-            .get_compose_project_name()?
-            .ok_or_else(|| miette!("This devcontainer does not use docker-compose"))?;
+        if let Some(project_name) = self.get_compose_project_name()? {
+            let containers = self.find_compose_containers(&project_name).await?;
+            if containers.is_empty() {
+                log!("Info": "No containers found for compose project '{}'", project_name);
+                return Ok(());
+            }
 
-        let containers = self.find_compose_containers(&project_name).await?;
-        if containers.is_empty() {
-            log!("Info": "No containers found for compose project '{}'", project_name);
-            return Ok(());
+            exec::exec(&["docker", "compose", "-p", &project_name, "down"])
+                .await
+                .wrap_err("failed to down docker compose stack")?;
+        } else {
+            let containers = self.find_non_compose_containers(true).await?;
+            if containers.is_empty() {
+                log!(
+                    "Info": "No containers found for config '{}'",
+                    self.config_path.display()
+                );
+                return Ok(());
+            }
+
+            let mut args = vec!["docker".to_string(), "rm".to_string(), "-f".to_string()];
+            args.extend(containers);
+            exec::exec(&args)
+                .await
+                .wrap_err("failed to remove devcontainer container(s)")?;
         }
 
-        exec::exec(&["docker", "compose", "-p", &project_name, "down"])
-            .await
-            .wrap_err("failed to down docker compose stack")?;
         // Clear cache after removing container
         *self.cached_up_output.lock().await = None;
         Ok(())
@@ -901,6 +1062,13 @@ fn compute_compose_project_name(
     workspace_folder: &Path,
     config_path: &Path,
 ) -> Result<Option<String>> {
+    let devcontainer_json = load_devcontainer_json(config_path)?;
+    let Some(compose_paths) =
+        resolve_compose_file_paths(&devcontainer_json, workspace_folder, config_path)?
+    else {
+        return Ok(None);
+    };
+
     let env_name = normalize_project_name(
         std::env::var("COMPOSE_PROJECT_NAME")
             .unwrap_or_default()
@@ -925,12 +1093,6 @@ fn compute_compose_project_name(
         }
     }
 
-    let devcontainer_json = load_devcontainer_json(config_path)?;
-    let Some(compose_paths) =
-        resolve_compose_file_paths(&devcontainer_json, workspace_folder, config_path)?
-    else {
-        return Ok(None);
-    };
     let config_dir = normalize_path(config_path.parent().unwrap_or(Path::new(".")));
 
     // In compose file arrays, later files override earlier files.
@@ -1413,5 +1575,27 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(project, "from-dot-env");
+    }
+
+    #[test]
+    fn non_compose_config_does_not_use_compose_project_name_env() {
+        let _lock = global_env_lock().lock().unwrap();
+        let _env = EnvVarGuard::set("COMPOSE_PROJECT_NAME", "should-not-be-used");
+
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("bar");
+        let config_path = workspace.join(".devcontainer/devcontainer.json");
+
+        write(
+            &config_path,
+            r#"
+            {
+              "image": "debian:bookworm"
+            }
+            "#,
+        );
+
+        let project = compute_compose_project_name(&workspace, &config_path).unwrap();
+        assert!(project.is_none());
     }
 }

@@ -15,38 +15,44 @@ pub async fn main(_config: &Config, args: &Args, _ps_args: &PsArgs) -> Result<()
         .wrap_err("failed to initialize devcontainer client")?;
 
     let compose_files = dc.compose_file_paths()?;
-
-    let Some(compose_files) = compose_files else {
-        print_configuration(&workspace_folder, &config_path);
-        println!();
-        println!("Compose");
-        println!("  Not a compose-based devcontainer (dockerComposeFile is not configured)");
-        return Ok(());
-    };
-
-    let project_name = dc.compose_project_name()?.ok_or_else(|| {
-        miette!("dockerComposeFile is configured but compose project name was not determined")
-    })?;
-    let service_name = dc
-        .compose_service_name()?
-        .unwrap_or_else(|| "(missing `service` field)".to_string());
     let mut containers = Vec::new();
     let mut container_error = None;
-
-    match dc.list_compose_containers(&project_name).await {
-        Ok(found) => containers = found,
-        Err(err) => container_error = Some(err.to_string()),
-    }
+    let (compose_project, compose_service) = if compose_files.is_some() {
+        let project_name = dc.compose_project_name()?.ok_or_else(|| {
+            miette!("dockerComposeFile is configured but compose project name was not determined")
+        })?;
+        let service_name = dc
+            .compose_service_name()?
+            .unwrap_or_else(|| "(missing `service` field)".to_string());
+        match dc.list_compose_containers(&project_name).await {
+            Ok(found) => containers = found,
+            Err(err) => container_error = Some(err.to_string()),
+        }
+        (Some(project_name), Some(service_name))
+    } else {
+        match dc.list_non_compose_containers().await {
+            Ok(found) => containers = found,
+            Err(err) => container_error = Some(err.to_string()),
+        }
+        (None, None)
+    };
 
     print_configuration(&workspace_folder, &config_path);
 
     println!();
     println!("Compose");
-    println!("  Project: {}", project_name);
-    println!("  Service: {}", service_name);
-    println!("  Files:");
-    for compose_file in compose_files {
-        println!("    - {}", compose_file.display());
+    if let Some(project_name) = compose_project {
+        println!("  Project: {}", project_name);
+        println!(
+            "  Service: {}",
+            compose_service.unwrap_or_else(|| "(missing `service` field)".to_string())
+        );
+        println!("  Files:");
+        for compose_file in compose_files.unwrap_or_default() {
+            println!("    - {}", compose_file.display());
+        }
+    } else {
+        println!("  Not used (dockerComposeFile is not configured)");
     }
 
     println!();
