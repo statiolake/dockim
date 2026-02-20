@@ -7,6 +7,7 @@ use std::{
     collections::HashMap,
     fs::{self, File},
     io::Write,
+    path::Component,
     path::{Path, PathBuf},
     process::Stdio,
 };
@@ -141,7 +142,12 @@ impl DevContainer {
         let container_id = output
             .lines()
             .next()
-            .ok_or_else(|| miette!("No running container found for service '{}'", config.service_name))?
+            .ok_or_else(|| {
+                miette!(
+                    "No running container found for service '{}'",
+                    config.service_name
+                )
+            })?
             .to_string();
 
         // Get remote user from container if not specified in config
@@ -149,14 +155,9 @@ impl DevContainer {
             user
         } else {
             // Try to get from devcontainer.metadata label or fall back to inspecting the container
-            let user_output = exec::capturing_stdout(&[
-                "docker",
-                "exec",
-                &container_id,
-                "whoami",
-            ])
-            .await
-            .unwrap_or_else(|_| "root".to_string());
+            let user_output = exec::capturing_stdout(&["docker", "exec", &container_id, "whoami"])
+                .await
+                .unwrap_or_else(|_| "root".to_string());
             user_output.trim().to_string()
         };
 
@@ -743,9 +744,71 @@ fn normalize_project_name(name: &str) -> String {
         .collect()
 }
 
+/// Normalize path lexically without requiring the path to exist.
+/// This mirrors Node's path.resolve behavior for removing `.` and `..`.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    let is_absolute = path.is_absolute();
+
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let last = normalized.components().next_back();
+                match last {
+                    Some(Component::Normal(_)) => {
+                        normalized.pop();
+                    }
+                    Some(Component::ParentDir) => {
+                        if !is_absolute {
+                            normalized.push(component.as_os_str());
+                        }
+                    }
+                    Some(Component::RootDir | Component::Prefix(_)) => {}
+                    Some(Component::CurDir) | None => {
+                        if !is_absolute {
+                            normalized.push(component.as_os_str());
+                        }
+                    }
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+
+    normalized
+}
+
 /// Compute the docker-compose project name using the same logic as devcontainer CLI
 /// Returns None if this devcontainer doesn't use docker-compose
-fn compute_compose_project_name(workspace_folder: &Path, config_path: &Path) -> Result<Option<String>> {
+fn compute_compose_project_name(
+    workspace_folder: &Path,
+    config_path: &Path,
+) -> Result<Option<String>> {
+    let env_name = normalize_project_name(
+        std::env::var("COMPOSE_PROJECT_NAME")
+            .unwrap_or_default()
+            .trim(),
+    );
+    if !env_name.is_empty() {
+        return Ok(Some(env_name));
+    }
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        let env_file = current_dir.join(".env");
+        if let Ok(contents) = fs::read_to_string(env_file) {
+            for line in contents.lines() {
+                if let Some(value) = line.trim().strip_prefix("COMPOSE_PROJECT_NAME=") {
+                    let env_file_name = normalize_project_name(value.trim());
+                    if !env_file_name.is_empty() {
+                        return Ok(Some(env_file_name));
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     let devcontainer_json = load_devcontainer_json(config_path)?;
 
     // Check if dockerComposeFile is specified
@@ -767,44 +830,55 @@ fn compute_compose_project_name(workspace_folder: &Path, config_path: &Path) -> 
         return Ok(None);
     }
 
-    let config_dir = config_path.parent().unwrap_or(Path::new("."));
+    let config_dir = normalize_path(config_path.parent().unwrap_or(Path::new(".")));
+    let compose_paths = docker_compose_paths
+        .iter()
+        .map(|path| {
+            let path = path
+                .as_str()
+                .ok_or_else(|| miette!("failed to parse compose file path"))?;
 
-    // Resolve the first compose file path
-    let first_compose_path = docker_compose_paths[0]
-        .as_str()
-        .ok_or_else(|| miette!("failed to parse compose file path"))?;
+            let path = path.replace(
+                "${localWorkspaceFolder}",
+                &workspace_folder.to_string_lossy(),
+            );
 
-    let first_compose_path = first_compose_path.replace(
-        "${localWorkspaceFolder}",
-        &workspace_folder.to_string_lossy(),
-    );
+            let path = if Path::new(&path).is_absolute() {
+                PathBuf::from(path)
+            } else {
+                config_dir.join(path)
+            };
+            Ok(normalize_path(&path))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-    let first_compose_path = if Path::new(&first_compose_path).is_absolute() {
-        PathBuf::from(first_compose_path)
-    } else {
-        config_dir.join(first_compose_path)
-    };
-
-    // Check if compose file has a 'name' field
-    if first_compose_path.exists() {
-        if let Ok(contents) = fs::read_to_string(&first_compose_path) {
+    // In compose file arrays, later files override earlier files.
+    let mut compose_name = None;
+    for compose_path in &compose_paths {
+        if !compose_path.exists() {
+            continue;
+        }
+        if let Ok(contents) = fs::read_to_string(compose_path) {
             if let Ok(compose_value) = serde_yaml::from_str::<Value>(&contents) {
                 if let Some(name) = compose_value["name"].as_str() {
-                    if name != "devcontainer" {
-                        return Ok(Some(normalize_project_name(name)));
-                    }
-                    // If name is "devcontainer", check if it's explicitly set or just default
-                    // For simplicity, we'll treat it as explicit and use it
-                    return Ok(Some(normalize_project_name(name)));
+                    compose_name = Some(name.to_string());
                 }
             }
         }
     }
+    if let Some(compose_name) = compose_name {
+        let normalized = normalize_project_name(compose_name.trim());
+        if !normalized.is_empty() {
+            return Ok(Some(normalized));
+        }
+    }
+
+    let first_compose_path = &compose_paths[0];
 
     let compose_dir = first_compose_path.parent().unwrap_or(Path::new("."));
 
     // Check if compose file is in .devcontainer directory
-    let devcontainer_dir = config_dir;
+    let devcontainer_dir = config_dir.as_path();
     if compose_dir == devcontainer_dir {
         // Use {workspace_folder_name}_devcontainer
         let workspace_name = workspace_folder
@@ -843,7 +917,10 @@ struct ComposeConfig {
 }
 
 /// Extract compose configuration from devcontainer.json
-fn get_compose_config(workspace_folder: &Path, config_path: &Path) -> Result<Option<ComposeConfig>> {
+fn get_compose_config(
+    workspace_folder: &Path,
+    config_path: &Path,
+) -> Result<Option<ComposeConfig>> {
     let devcontainer_json = load_devcontainer_json(config_path)?;
 
     // Check if this is a compose-based devcontainer
@@ -1090,5 +1167,197 @@ impl Drop for PortForwardGuard {
                 let _ = exec::exec(&["docker", "stop", &container_name]).await;
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_compose_project_name;
+    use std::{
+        ffi::OsString,
+        fs,
+        path::{Path, PathBuf},
+        sync::{Mutex, OnceLock},
+    };
+    use tempfile::tempdir;
+
+    fn global_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    struct CurrentDirGuard {
+        previous: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn set(path: &Path) -> Self {
+            let previous = std::env::current_dir().unwrap();
+            std::env::set_current_dir(path).unwrap();
+            Self { previous }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.previous).unwrap();
+        }
+    }
+
+    fn write(path: &Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn compose_parent_with_dotdot_is_normalized_like_devcontainer_cli() {
+        let _lock = global_env_lock().lock().unwrap();
+        let _env = EnvVarGuard::unset("COMPOSE_PROJECT_NAME");
+
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("bar");
+        let config_path = workspace.join(".devcontainer/devcontainer.json");
+        let compose_path = workspace.join("compose.yml");
+
+        write(&compose_path, "services:\n  app:\n    image: alpine\n");
+        write(
+            &config_path,
+            r#"
+            {
+              "dockerComposeFile": "../compose.yml",
+              "service": "app"
+            }
+            "#,
+        );
+
+        let project = compute_compose_project_name(&workspace, &config_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(project, "bar");
+    }
+
+    #[test]
+    fn compose_name_from_last_file_wins() {
+        let _lock = global_env_lock().lock().unwrap();
+        let _env = EnvVarGuard::unset("COMPOSE_PROJECT_NAME");
+
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("bar");
+        let config_path = workspace.join(".devcontainer/devcontainer.json");
+        let compose1 = workspace.join("compose.yml");
+        let compose2 = workspace.join("compose.override.yml");
+
+        write(
+            &compose1,
+            "name: base-project\nservices:\n  app:\n    image: alpine\n",
+        );
+        write(
+            &compose2,
+            "name: override-project\nservices:\n  app:\n    command: [\"sleep\", \"infinity\"]\n",
+        );
+        write(
+            &config_path,
+            r#"
+            {
+              "dockerComposeFile": ["../compose.yml", "../compose.override.yml"],
+              "service": "app"
+            }
+            "#,
+        );
+
+        let project = compute_compose_project_name(&workspace, &config_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(project, "override-project");
+    }
+
+    #[test]
+    fn compose_project_name_uses_env_var_first() {
+        let _lock = global_env_lock().lock().unwrap();
+        let _env = EnvVarGuard::set("COMPOSE_PROJECT_NAME", "Env_Project-Name");
+
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("bar");
+        let config_path = workspace.join(".devcontainer/devcontainer.json");
+        let compose_path = workspace.join("compose.yml");
+
+        write(
+            &compose_path,
+            "name: from-compose\nservices:\n  app:\n    image: alpine\n",
+        );
+        write(
+            &config_path,
+            r#"
+            {
+              "dockerComposeFile": "../compose.yml",
+              "service": "app"
+            }
+            "#,
+        );
+
+        let project = compute_compose_project_name(&workspace, &config_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(project, "env_project-name");
+    }
+
+    #[test]
+    fn compose_project_name_uses_dot_env_when_env_var_missing() {
+        let _lock = global_env_lock().lock().unwrap();
+        let _env = EnvVarGuard::unset("COMPOSE_PROJECT_NAME");
+
+        let tmp = tempdir().unwrap();
+        let workspace = tmp.path().join("bar");
+        let config_path = workspace.join(".devcontainer/devcontainer.json");
+        let compose_path = workspace.join("compose.yml");
+        let cwd = tmp.path().join("cwd");
+
+        write(&cwd.join(".env"), "COMPOSE_PROJECT_NAME=from-dot-env\n");
+        write(&compose_path, "services:\n  app:\n    image: alpine\n");
+        write(
+            &config_path,
+            r#"
+            {
+              "dockerComposeFile": "../compose.yml",
+              "service": "app"
+            }
+            "#,
+        );
+
+        let _cwd = CurrentDirGuard::set(&cwd);
+        let project = compute_compose_project_name(&workspace, &config_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(project, "from-dot-env");
     }
 }
