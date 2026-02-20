@@ -810,7 +810,12 @@ fn compute_compose_project_name(workspace_folder: &Path, config_path: &Path) -> 
         let workspace_name = workspace_folder
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("workspace");
+            .ok_or_else(|| {
+                miette!(
+                    "failed to determine workspace folder name from path '{}'",
+                    workspace_folder.display()
+                )
+            })?;
         let project_name = format!("{}_devcontainer", workspace_name);
         return Ok(Some(normalize_project_name(&project_name)));
     }
@@ -819,7 +824,12 @@ fn compute_compose_project_name(workspace_folder: &Path, config_path: &Path) -> 
     let dir_name = compose_dir
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("default");
+        .ok_or_else(|| {
+            miette!(
+                "failed to determine compose directory name from path '{}'",
+                compose_dir.display()
+            )
+        })?;
     Ok(Some(normalize_project_name(dir_name)))
 }
 
