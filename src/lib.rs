@@ -1,3 +1,4 @@
+pub mod auto_port_forward;
 pub mod cli;
 pub mod clipboard;
 pub mod config;

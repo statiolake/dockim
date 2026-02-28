@@ -760,11 +760,10 @@ impl DevContainer {
     }
 
     pub async fn find_available_host_port(&self) -> Result<u16> {
-        let mut rng = rand::rng();
-
-        // Try random ports up to 1000 times
+        // Try random ports up to 1000 times.
+        // Create and drop the rng before each await point so the future stays Send.
         for _ in 0..1000 {
-            let port = rng.random_range(50000..60000);
+            let port = { rand::rng().random_range(50000u16..60000u16) };
             if self.is_host_port_available(port).await {
                 return Ok(port);
             }
@@ -777,6 +776,45 @@ impl DevContainer {
 
     async fn is_host_port_available(&self, port: u16) -> bool {
         TcpListener::bind(("127.0.0.1", port)).await.is_ok()
+    }
+
+    /// Detect ports currently listening inside the container by reading /proc/net/tcp and
+    /// /proc/net/tcp6. Returns port numbers in host byte order.
+    pub async fn detect_listening_ports(&self) -> Result<Vec<u16>> {
+        let output = self
+            .exec_capturing_stdout(
+                &[
+                    "sh",
+                    "-c",
+                    "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null || true",
+                ],
+                RootMode::No,
+            )
+            .await
+            .wrap_err("failed to read /proc/net/tcp inside container")?;
+
+        let mut ports = std::collections::HashSet::new();
+        for line in output.lines().skip(1) {
+            // Fields: sl local_address rem_address st tx_queue rx_queue ...
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() < 4 {
+                continue;
+            }
+            // state 0A = TCP_LISTEN
+            if fields[3] != "0A" {
+                continue;
+            }
+            // local_address is "XXXXXXXX:PPPP" (hex, big-endian for IPv4, little-endian for port)
+            if let Some(port_hex) = fields[1].split(':').nth(1) {
+                if let Ok(port) = u16::from_str_radix(port_hex, 16) {
+                    if port > 0 {
+                        ports.insert(port);
+                    }
+                }
+            }
+        }
+
+        Ok(ports.into_iter().collect())
     }
 
     async fn socat_container_name(&self, host_port: &str) -> Result<String> {
