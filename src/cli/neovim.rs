@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     mem,
     rc::Rc,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -10,6 +11,7 @@ use scopeguard::defer;
 use tokio::{process::Child, runtime::Handle, select, signal, sync::Mutex, task, time};
 
 use crate::{
+    auto_port_forward::AutoPortForwarder,
     cli::{Args, BuildArgs, NeovimArgs},
     clipboard::{self, SpawnedInfo},
     config::Config,
@@ -22,11 +24,13 @@ pub const CONTAINER_ID_PLACEHOLDER: &str = "{container_id}";
 pub const WORKSPACE_FOLDER_PLACEHOLDER: &str = "{workspace_folder}";
 
 pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
-    let dc = DevContainer::new(
-        args.resolve_workspace_folder()?,
-        args.resolve_config_path()?,
-    )
-    .wrap_err("failed to initialize devcontainer client")?;
+    let dc = Arc::new(
+        DevContainer::new(
+            args.resolve_workspace_folder()?,
+            args.resolve_config_path()?,
+        )
+        .wrap_err("failed to initialize devcontainer client")?,
+    );
 
     dc.up(false, false).await?;
 
@@ -70,6 +74,8 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
     }
 
     if neovim_args.no_remote_ui {
+        // Auto-forward ports while Neovim runs directly in the container.
+        let _auto_forward = AutoPortForwarder::start(dc.clone(), vec![]);
         // Run Neovim in container
         run_neovim_directly(&dc, args, clipboard_port).await
     } else {
@@ -88,6 +94,10 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
             println!("Auto-selected host port: {auto_host_port}");
             (auto_host_port.to_string(), "54321".to_string())
         };
+
+        // Exclude the Neovim server port from auto-forwarding (it is already forwarded explicitly).
+        let nvim_container_port: u16 = container_port.parse().unwrap_or(54321);
+        let _auto_forward = AutoPortForwarder::start(dc.clone(), vec![nvim_container_port]);
 
         // Run Neovim server in the container and connect to it. Shutdown gracefully on Ctrl+C
         select! {

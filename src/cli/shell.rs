@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use crate::{
+    auto_port_forward::AutoPortForwarder,
     cli::{Args, BuildArgs, ShellArgs},
     config::Config,
     devcontainer::{DevContainer, RootMode},
@@ -7,11 +10,13 @@ use crate::{
 use miette::{miette, Result, WrapErr};
 
 pub async fn main(config: &Config, args: &Args, shell_args: &ShellArgs) -> Result<()> {
-    let dc = DevContainer::new(
-        args.resolve_workspace_folder()?,
-        args.resolve_config_path()?,
-    )
-    .wrap_err("failed to initialize devcontainer client")?;
+    let dc = Arc::new(
+        DevContainer::new(
+            args.resolve_workspace_folder()?,
+            args.resolve_config_path()?,
+        )
+        .wrap_err("failed to initialize devcontainer client")?,
+    );
 
     dc.up(false, false).await?;
 
@@ -30,6 +35,9 @@ pub async fn main(config: &Config, args: &Args, shell_args: &ShellArgs) -> Resul
         };
         crate::cli::build::main(config, args, &build_args).await?;
     }
+
+    // Automatically forward any ports the container starts listening on while the shell runs.
+    let _auto_forward = AutoPortForwarder::start(dc.clone(), vec![]);
 
     let mut cmd_args = vec![&*config.shell];
     cmd_args.extend(shell_args.args.iter().map(|s| s.as_str()));
