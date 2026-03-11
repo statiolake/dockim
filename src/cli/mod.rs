@@ -1,4 +1,7 @@
-use std::path::{self, Path, PathBuf, MAIN_SEPARATOR};
+use std::{
+    fs,
+    path::{self, Path, PathBuf, MAIN_SEPARATOR},
+};
 
 use miette::{miette, Context, IntoDiagnostic, Result};
 
@@ -12,6 +15,7 @@ pub mod exec;
 pub mod init;
 pub mod init_config;
 pub mod init_docker;
+pub mod ls;
 pub mod neovim;
 pub mod port;
 pub mod ps;
@@ -39,6 +43,12 @@ pub struct Args {
     pub config: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevContainerConfigEntry {
+    pub name: String,
+    pub path: PathBuf,
+}
+
 impl Args {
     pub fn resolve_workspace_folder(&self) -> Result<PathBuf> {
         let path = match &self.workspace_folder {
@@ -64,10 +74,28 @@ impl Args {
                 if config_arg.contains('/') || config_arg.contains(MAIN_SEPARATOR) {
                     PathBuf::from(config_arg)
                 } else {
-                    workspace_folder
-                        .join(".devcontainer")
-                        .join(config_arg)
-                        .join("devcontainer.json")
+                    let discovered = self.discover_devcontainer_configs()?;
+                    discovered
+                        .iter()
+                        .find(|entry| entry.name == *config_arg)
+                        .map(|entry| entry.path.clone())
+                        .ok_or_else(|| {
+                            let available = discovered
+                                .iter()
+                                .map(|entry| entry.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let available = (!available.is_empty())
+                                .then_some(available)
+                                .filter(|names| !names.is_empty())
+                                .unwrap_or_else(|| "(none)".to_string());
+
+                            miette!(
+                                "unknown devcontainer configuration '{}'; available configurations: {}",
+                                config_arg,
+                                available
+                            )
+                        })?
                 }
             }
         };
@@ -78,6 +106,48 @@ impl Args {
                 path.display()
             )
         })
+    }
+
+    pub fn discover_devcontainer_configs(&self) -> Result<Vec<DevContainerConfigEntry>> {
+        let workspace_folder = self.resolve_workspace_folder()?;
+        let devcontainer_dir = workspace_folder.join(".devcontainer");
+        if !devcontainer_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut configs = Vec::new();
+        let root_config = devcontainer_dir.join("devcontainer.json");
+        if root_config.exists() {
+            configs.push(DevContainerConfigEntry {
+                name: ".".to_string(),
+                path: root_config,
+            });
+        }
+
+        for entry in fs::read_dir(&devcontainer_dir).into_diagnostic()? {
+            let entry = entry.into_diagnostic()?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let config_path = path.join("devcontainer.json");
+            if !config_path.exists() {
+                continue;
+            }
+
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+
+            configs.push(DevContainerConfigEntry {
+                name: name.to_string(),
+                path: config_path,
+            });
+        }
+
+        configs.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(configs)
     }
 }
 
@@ -127,6 +197,9 @@ pub enum Subcommand {
 
     #[clap(about = "Show resolved devcontainer/compose status")]
     Ps(PsArgs),
+
+    #[clap(about = "List available dev container configurations")]
+    Ls(LsArgs),
 
     #[clap(about = "Start clipboard server for clipboard support")]
     ClipboardServer(ClipboardServerArgs),
@@ -261,3 +334,69 @@ pub struct PsArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct ClipboardServerArgs {}
+
+#[derive(Debug, clap::Parser)]
+pub struct LsArgs {}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path};
+
+    use tempfile::tempdir;
+
+    use super::{Args, DevContainerConfigEntry, Subcommand};
+
+    #[test]
+    fn discover_devcontainer_configs_lists_root_and_named_configs() {
+        let tempdir = tempdir().unwrap();
+        let workspace = tempdir.path();
+        let devcontainer_dir = workspace.join(".devcontainer");
+        fs::create_dir_all(devcontainer_dir.join("api")).unwrap();
+        fs::create_dir_all(devcontainer_dir.join("empty")).unwrap();
+        fs::write(devcontainer_dir.join("devcontainer.json"), "{}").unwrap();
+        fs::write(devcontainer_dir.join("api").join("devcontainer.json"), "{}").unwrap();
+
+        let args = Args {
+            subcommand: Subcommand::Ls(super::LsArgs {}),
+            workspace_folder: Some(workspace.to_path_buf()),
+            config: None,
+        };
+        let discovered = args.discover_devcontainer_configs().unwrap();
+
+        assert_eq!(
+            discovered,
+            vec![
+                DevContainerConfigEntry {
+                    name: ".".to_string(),
+                    path: devcontainer_dir.join("devcontainer.json"),
+                },
+                DevContainerConfigEntry {
+                    name: "api".to_string(),
+                    path: devcontainer_dir.join("api").join("devcontainer.json"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_config_path_uses_discovered_named_configs() {
+        let tempdir = tempdir().unwrap();
+        let workspace = tempdir.path();
+        let devcontainer_dir = workspace.join(".devcontainer");
+        fs::create_dir_all(devcontainer_dir.join("api")).unwrap();
+        fs::write(devcontainer_dir.join("api").join("devcontainer.json"), "{}").unwrap();
+
+        let args = Args {
+            subcommand: Subcommand::Ls(super::LsArgs {}),
+            workspace_folder: Some(workspace.to_path_buf()),
+            config: Some("api".to_string()),
+        };
+
+        let resolved = args.resolve_config_path().unwrap();
+
+        assert_eq!(
+            resolved,
+            path::absolute(devcontainer_dir.join("api").join("devcontainer.json")).unwrap()
+        );
+    }
+}
