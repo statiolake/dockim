@@ -1,21 +1,19 @@
+use std::{
+    collections::HashMap,
+    fs::{self, File},
+    io::Write,
+    path::{Component, Path, PathBuf},
+    process::Stdio,
+};
+
 use itertools::Itertools;
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    fs::{self, File},
-    io::Write,
-    path::Component,
-    path::{Path, PathBuf},
-    process::Stdio,
-};
-use tokio::net::TcpListener;
-
 use tar;
 use tempfile::{NamedTempFile, TempPath};
-use tokio::{process::Child, runtime::Handle, sync::Mutex, task};
+use tokio::{net::TcpListener, process::Child, runtime::Handle, sync::Mutex, task};
 
 use crate::{
     exec::{self, ExecOutput},
@@ -894,23 +892,26 @@ impl DevContainer {
         };
 
         // 既存の host.docker.internal エントリを削除し、新しいエントリを追加
-        self.exec(
-            &[
-                "sh",
-                "-c",
-                &format!(
-                    concat!(
-                        "grep -v 'host.docker.internal' /etc/hosts > /tmp/hosts.tmp && ",
-                        "echo '{host_ip_addr} host.docker.internal' >> /tmp/hosts.tmp && ",
-                        "cp /tmp/hosts.tmp /etc/hosts && ",
-                        "rm /tmp/hosts.tmp"
+        // 稀に /etc/hosts を直接書き換えることに失敗することがあるが、その場合に dockim が一切使え
+        // ないのは微妙なので、エラー時は無視して続行する。
+        let _ = self
+            .exec(
+                &[
+                    "sh",
+                    "-c",
+                    &format!(
+                        concat!(
+                            "grep -v 'host.docker.internal' /etc/hosts > /tmp/hosts.tmp && ",
+                            "echo '{host_ip_addr} host.docker.internal' >> /tmp/hosts.tmp && ",
+                            "cp /tmp/hosts.tmp /etc/hosts && ",
+                            "rm /tmp/hosts.tmp"
+                        ),
+                        host_ip_addr = host_ip_addr
                     ),
-                    host_ip_addr = host_ip_addr
-                ),
-            ],
-            RootMode::Yes,
-        )
-        .await?;
+                ],
+                RootMode::Yes,
+            )
+            .await;
 
         Ok(())
     }
