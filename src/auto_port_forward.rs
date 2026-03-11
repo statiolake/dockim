@@ -48,8 +48,7 @@ async fn run_auto_forward(
     exclude_ports: Vec<u16>,
 ) {
     // container_port -> (host_port, PortForwardGuard)
-    let mut forwarded: HashMap<u16, (u16, crate::devcontainer::PortForwardGuard)> =
-        HashMap::new();
+    let mut forwarded: HashMap<u16, (u16, crate::devcontainer::PortForwardGuard)> = HashMap::new();
 
     loop {
         tokio::select! {
@@ -114,5 +113,7 @@ async fn choose_host_port(container_port: u16, dc: &DevContainer) -> u16 {
     {
         return container_port;
     }
-    dc.find_available_host_port().await.unwrap_or(container_port)
+    dc.find_available_host_port()
+        .await
+        .unwrap_or(container_port)
 }
