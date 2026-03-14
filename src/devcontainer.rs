@@ -84,8 +84,9 @@ impl DevContainer {
             .is_ok()
     }
 
-    pub fn new(workspace_folder: PathBuf, config_path: PathBuf) -> Result<Self> {
-        let overriden_config = generate_overriden_config_paths(&workspace_folder, &config_path)?;
+    pub async fn new(workspace_folder: PathBuf, config_path: PathBuf) -> Result<Self> {
+        let overriden_config =
+            generate_overriden_config_paths(&workspace_folder, &config_path).await?;
 
         Ok(DevContainer {
             workspace_folder,
@@ -128,7 +129,8 @@ impl DevContainer {
             return Ok(cached.clone());
         }
 
-        let config = get_compose_config(&self.workspace_folder, &self.config_path)?
+        let config = get_compose_config(&self.workspace_folder, &self.config_path)
+            .await?
             .ok_or_else(|| miette!("This devcontainer does not use docker-compose"))?;
 
         // Find container by project and service labels
@@ -181,12 +183,12 @@ impl DevContainer {
     }
 
     /// Get compose project name without running devcontainer up
-    fn get_compose_project_name(&self) -> Result<Option<String>> {
-        compute_compose_project_name(&self.workspace_folder, &self.config_path)
+    async fn get_compose_project_name(&self) -> Result<Option<String>> {
+        compute_compose_project_name(&self.workspace_folder, &self.config_path).await
     }
 
-    pub fn compose_project_name(&self) -> Result<Option<String>> {
-        self.get_compose_project_name()
+    pub async fn compose_project_name(&self) -> Result<Option<String>> {
+        self.get_compose_project_name().await
     }
 
     pub fn compose_file_paths(&self) -> Result<Option<Vec<PathBuf>>> {
@@ -397,7 +399,7 @@ impl DevContainer {
     }
 
     pub async fn stop(&self) -> Result<()> {
-        if let Some(project_name) = self.get_compose_project_name()? {
+        if let Some(project_name) = self.get_compose_project_name().await? {
             let containers = self.find_compose_containers(&project_name).await?;
             if containers.is_empty() {
                 log!("Info": "No running containers found for compose project '{}'", project_name);
@@ -430,7 +432,7 @@ impl DevContainer {
     }
 
     pub async fn down(&self) -> Result<()> {
-        if let Some(project_name) = self.get_compose_project_name()? {
+        if let Some(project_name) = self.get_compose_project_name().await? {
             let containers = self.find_compose_containers(&project_name).await?;
             if containers.is_empty() {
                 log!("Info": "No containers found for compose project '{}'", project_name);
@@ -968,12 +970,13 @@ struct OverridenConfigPaths {
 /// Generate override config file contents to achieve various useful features:
 /// - Root user execution in container without sudo installation
 /// - host.docker.internal on Linux
-fn generate_overriden_config_paths(
+async fn generate_overriden_config_paths(
     workspace_folder: &Path,
     config_path: &Path,
 ) -> Result<OverridenConfigPaths> {
     // devcontainer.json
     let compose_yaml = generate_overriden_compose_yaml(workspace_folder, config_path)
+        .await
         .wrap_err("failed to generate temporary docker-compose overrides")?
         .map(|f| f.into_temp_path());
     let devcontainer_json =
@@ -1097,7 +1100,7 @@ fn resolve_compose_file_paths(
 
 /// Compute the docker-compose project name using the same logic as devcontainer CLI
 /// Returns None if this devcontainer doesn't use docker-compose
-fn compute_compose_project_name(
+async fn compute_compose_project_name(
     workspace_folder: &Path,
     config_path: &Path,
 ) -> Result<Option<String>> {
@@ -1132,28 +1135,15 @@ fn compute_compose_project_name(
         }
     }
 
-    let config_dir = normalize_path(config_path.parent().unwrap_or(Path::new(".")));
-
-    // In compose file arrays, later files override earlier files.
-    let mut compose_name = None;
-    for compose_path in &compose_paths {
-        if !compose_path.exists() {
-            continue;
-        }
-        if let Ok(contents) = fs::read_to_string(compose_path) {
-            if let Ok(compose_value) = serde_yaml::from_str::<Value>(&contents) {
-                if let Some(name) = compose_value["name"].as_str() {
-                    compose_name = Some(name.to_string());
-                }
-            }
-        }
-    }
+    let compose_name = get_compose_project_name_from_docker(&compose_paths).await?;
     if let Some(compose_name) = compose_name {
         let normalized = normalize_project_name(compose_name.trim());
         if !normalized.is_empty() {
             return Ok(Some(normalized));
         }
     }
+
+    let config_dir = normalize_path(config_path.parent().unwrap_or(Path::new(".")));
 
     let first_compose_path = &compose_paths[0];
 
@@ -1199,14 +1189,14 @@ struct ComposeConfig {
 }
 
 /// Extract compose configuration from devcontainer.json
-fn get_compose_config(
+async fn get_compose_config(
     workspace_folder: &Path,
     config_path: &Path,
 ) -> Result<Option<ComposeConfig>> {
     let devcontainer_json = load_devcontainer_json(config_path)?;
 
     // Check if this is a compose-based devcontainer
-    let project_name = match compute_compose_project_name(workspace_folder, config_path)? {
+    let project_name = match compute_compose_project_name(workspace_folder, config_path).await? {
         Some(name) => name,
         None => return Ok(None),
     };
@@ -1320,7 +1310,7 @@ fn generate_overriden_root_devcontainer_json(
     Ok(overriden_file)
 }
 
-fn generate_overriden_compose_yaml(
+async fn generate_overriden_compose_yaml(
     workspace_folder: &Path,
     config_path: &Path,
 ) -> Result<Option<NamedTempFile>> {
@@ -1332,38 +1322,9 @@ fn generate_overriden_compose_yaml(
         return Ok(None);
     };
 
-    let services: Vec<_> = compose_paths
-        .into_iter()
-        .map(|path| {
-            if !path.exists() {
-                return Err(miette!("compose file '{}' does not exist", path.display()));
-            }
-            Ok(path)
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .map(|path| {
-            let path = path.to_path_buf();
-            let contents = fs::read_to_string(&path)
-                .into_diagnostic()
-                .wrap_err_with(|| miette!("failed to read {}", path.display()))?;
-
-            let value: Value = serde_yaml::from_str(&contents)
-                .into_diagnostic()
-                .wrap_err("failed to parse docker-compose.yml")?;
-
-            Ok(value["services"]
-                .as_object()
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(k, _)| k))
-        })
-        .collect::<Result<Vec<_>>>()
-        .wrap_err("failed to parse some of docker-compose.yml")?
-        .into_iter()
-        .flatten()
-        .collect();
+    let services = resolve_compose_service_names(&compose_paths)
+        .await
+        .wrap_err("failed to resolve compose services")?;
 
     let mut overriden_compose_yaml =
         NamedTempFile::new().expect("failed to create temp file for overriding remote user");
@@ -1407,6 +1368,45 @@ fn generate_overriden_compose_yaml(
         .wrap_err("failed to write to override config")?;
 
     Ok(Some(overriden_compose_yaml))
+}
+
+fn make_docker_compose_args(compose_paths: &[PathBuf], tail_args: &[&str]) -> Vec<String> {
+    let mut args = vec!["docker".to_string(), "compose".to_string()];
+    for compose_path in compose_paths {
+        args.push("-f".to_string());
+        args.push(compose_path.to_string_lossy().to_string());
+    }
+    args.extend(tail_args.iter().map(|arg| arg.to_string()));
+    args
+}
+
+async fn get_compose_project_name_from_docker(compose_paths: &[PathBuf]) -> Result<Option<String>> {
+    let args = make_docker_compose_args(compose_paths, &["config", "--format", "json"]);
+    let output = exec::capturing_stdout(&args)
+        .await
+        .wrap_err("failed to read compose project name via docker compose config")?;
+
+    let value: Value = serde_json::from_str(&output)
+        .into_diagnostic()
+        .wrap_err("failed to parse docker compose config output")?;
+
+    Ok(value["name"].as_str().map(str::to_string))
+}
+
+async fn resolve_compose_service_names(compose_paths: &[PathBuf]) -> Result<Vec<String>> {
+    let args = make_docker_compose_args(compose_paths, &["config", "--services"]);
+    let output = exec::capturing_stdout(&args)
+        .await
+        .wrap_err("failed to read compose services via docker compose config")?;
+
+    let services = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect_vec();
+
+    Ok(services)
 }
 
 #[derive(Debug)]
@@ -1494,8 +1494,8 @@ mod tests {
         fs::write(path, contents).unwrap();
     }
 
-    #[test]
-    fn compose_parent_with_dotdot_is_normalized_like_devcontainer_cli() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn compose_parent_with_dotdot_is_normalized_like_devcontainer_cli() {
         let _lock = global_env_lock().lock().unwrap();
         let _env = EnvVarGuard::unset("COMPOSE_PROJECT_NAME");
 
@@ -1516,13 +1516,14 @@ mod tests {
         );
 
         let project = compute_compose_project_name(&workspace, &config_path)
+            .await
             .unwrap()
             .unwrap();
         assert_eq!(project, "bar");
     }
 
-    #[test]
-    fn compose_name_from_last_file_wins() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn compose_name_from_last_file_wins() {
         let _lock = global_env_lock().lock().unwrap();
         let _env = EnvVarGuard::unset("COMPOSE_PROJECT_NAME");
 
@@ -1551,13 +1552,14 @@ mod tests {
         );
 
         let project = compute_compose_project_name(&workspace, &config_path)
+            .await
             .unwrap()
             .unwrap();
         assert_eq!(project, "override-project");
     }
 
-    #[test]
-    fn compose_project_name_uses_env_var_first() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn compose_project_name_uses_env_var_first() {
         let _lock = global_env_lock().lock().unwrap();
         let _env = EnvVarGuard::set("COMPOSE_PROJECT_NAME", "Env_Project-Name");
 
@@ -1581,13 +1583,14 @@ mod tests {
         );
 
         let project = compute_compose_project_name(&workspace, &config_path)
+            .await
             .unwrap()
             .unwrap();
         assert_eq!(project, "env_project-name");
     }
 
-    #[test]
-    fn compose_project_name_uses_dot_env_when_env_var_missing() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn compose_project_name_uses_dot_env_when_env_var_missing() {
         let _lock = global_env_lock().lock().unwrap();
         let _env = EnvVarGuard::unset("COMPOSE_PROJECT_NAME");
 
@@ -1611,13 +1614,14 @@ mod tests {
 
         let _cwd = CurrentDirGuard::set(&cwd);
         let project = compute_compose_project_name(&workspace, &config_path)
+            .await
             .unwrap()
             .unwrap();
         assert_eq!(project, "from-dot-env");
     }
 
-    #[test]
-    fn non_compose_config_does_not_use_compose_project_name_env() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn non_compose_config_does_not_use_compose_project_name_env() {
         let _lock = global_env_lock().lock().unwrap();
         let _env = EnvVarGuard::set("COMPOSE_PROJECT_NAME", "should-not-be-used");
 
@@ -1634,7 +1638,9 @@ mod tests {
             "#,
         );
 
-        let project = compute_compose_project_name(&workspace, &config_path).unwrap();
+        let project = compute_compose_project_name(&workspace, &config_path)
+            .await
+            .unwrap();
         assert!(project.is_none());
     }
 }

@@ -14,7 +14,8 @@ pub async fn main(
     let dc = DevContainer::new(
         args.resolve_workspace_folder()?,
         args.resolve_config_path()?,
-    )?;
+    )
+    .await?;
 
     // Find an available port
     let clipboard_port = dc.find_available_host_port().await?;

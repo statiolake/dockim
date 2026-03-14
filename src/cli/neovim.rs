@@ -29,6 +29,7 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
             args.resolve_workspace_folder()?,
             args.resolve_config_path()?,
         )
+        .await
         .wrap_err("failed to initialize devcontainer client")?,
     );
 

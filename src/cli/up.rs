@@ -9,6 +9,7 @@ pub async fn main(_config: &Config, args: &Args, up_args: &UpArgs) -> Result<()>
         args.resolve_workspace_folder()?,
         args.resolve_config_path()?,
     )
+    .await
     .wrap_err("failed to initialize devcontainer client")?;
     dc.up(up_args.rebuild, up_args.build_no_cache).await?;
 

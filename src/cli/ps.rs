@@ -12,13 +12,14 @@ pub async fn main(_config: &Config, args: &Args, _ps_args: &PsArgs) -> Result<()
     let config_path = args.resolve_config_path()?;
 
     let dc = DevContainer::new(workspace_folder.clone(), config_path.clone())
+        .await
         .wrap_err("failed to initialize devcontainer client")?;
 
     let compose_files = dc.compose_file_paths()?;
     let mut containers = Vec::new();
     let mut container_error = None;
     let (compose_project, compose_service) = if compose_files.is_some() {
-        let project_name = dc.compose_project_name()?.ok_or_else(|| {
+        let project_name = dc.compose_project_name().await?.ok_or_else(|| {
             miette!("dockerComposeFile is configured but compose project name was not determined")
         })?;
         let service_name = dc
