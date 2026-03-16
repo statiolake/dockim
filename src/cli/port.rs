@@ -1,4 +1,4 @@
-use std::mem;
+use std::{mem, sync::Arc};
 
 use itertools::Itertools;
 use miette::{bail, Context, Result};
@@ -7,42 +7,47 @@ use crate::{
     cli::{Args, PortAddArgs, PortArgs, PortRmArgs, PortSubcommand},
     config::Config,
     devcontainer::DevContainer,
+    port_forwarder::PortForwarder,
 };
 
 pub async fn main(_config: &Config, args: &Args, port_args: &PortArgs) -> Result<()> {
-    let dc = DevContainer::new(
-        args.resolve_workspace_folder()?,
-        args.resolve_config_path()?,
-    )
-    .await
-    .wrap_err("failed to initialize devcontainer client")?;
+    let dc = Arc::new(
+        DevContainer::new(
+            args.resolve_workspace_folder()?,
+            args.resolve_config_path()?,
+        )
+        .await
+        .wrap_err("failed to initialize devcontainer client")?,
+    );
 
     dc.up(false, false).await?;
 
+    let forwarder = PortForwarder::new(dc);
+
     match &port_args.subcommand {
-        PortSubcommand::Add(add_args) => add_port(&dc, add_args).await,
-        PortSubcommand::Rm(rm_args) => remove_port(&dc, rm_args).await,
-        PortSubcommand::Ls(_ls_args) => list_ports(&dc).await,
+        PortSubcommand::Add(add_args) => add_port(&forwarder, add_args).await,
+        PortSubcommand::Rm(rm_args) => remove_port(&forwarder, rm_args).await,
+        PortSubcommand::Ls(_ls_args) => list_ports(&forwarder).await,
     }
 }
 
-async fn add_port(dc: &DevContainer, add_args: &PortAddArgs) -> Result<()> {
+async fn add_port(forwarder: &PortForwarder, add_args: &PortAddArgs) -> Result<()> {
     let (host_port, container_port) = parse_port_descriptor(&add_args.port_descriptor)?;
 
     // We need to forget because forward_port() returns a guard that will stop forwarding on drop
-    mem::forget(dc.forward_port(host_port, container_port).await?);
+    mem::forget(forwarder.forward_port(host_port, container_port).await?);
 
     println!("Port forwarding started: {host_port}:{container_port}");
     Ok(())
 }
 
-async fn remove_port(dc: &DevContainer, rm_args: &PortRmArgs) -> Result<()> {
+async fn remove_port(forwarder: &PortForwarder, rm_args: &PortRmArgs) -> Result<()> {
     if rm_args.all {
-        dc.remove_all_forwarded_ports().await?;
+        forwarder.remove_all_forwarded_ports().await?;
         println!("All port forwards removed");
     } else if let Some(port_descriptor) = &rm_args.port_descriptor {
         let (host_port, _) = parse_port_descriptor(port_descriptor)?;
-        dc.stop_forward_port(host_port).await?;
+        forwarder.stop_forward_port(host_port).await?;
         println!("Port forwarding stopped: {host_port}");
     } else {
         bail!("Must specify either a port descriptor or --all flag");
@@ -50,8 +55,8 @@ async fn remove_port(dc: &DevContainer, rm_args: &PortRmArgs) -> Result<()> {
     Ok(())
 }
 
-async fn list_ports(dc: &DevContainer) -> Result<()> {
-    let ports = dc.list_forwarded_ports().await?;
+async fn list_ports(forwarder: &PortForwarder) -> Result<()> {
+    let ports = forwarder.list_forwarded_ports().await?;
 
     if ports.is_empty() {
         println!("No port forwards active");

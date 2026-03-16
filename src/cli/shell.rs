@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
+use miette::{miette, Result, WrapErr};
+
 use crate::{
     auto_port_forward::AutoPortForwarder,
     cli::{Args, BuildArgs, ShellArgs},
     config::Config,
     devcontainer::{DevContainer, RootMode},
+    port_forwarder::PortForwarder,
     log,
 };
-use miette::{miette, Result, WrapErr};
 
 pub async fn main(config: &Config, args: &Args, shell_args: &ShellArgs) -> Result<()> {
     let dc = Arc::new(
@@ -38,7 +40,8 @@ pub async fn main(config: &Config, args: &Args, shell_args: &ShellArgs) -> Resul
     }
 
     // Automatically forward any ports the container starts listening on while the shell runs.
-    let _auto_forward = AutoPortForwarder::start(dc.clone(), vec![]);
+    let manager = Arc::new(PortForwarder::new(dc.clone()));
+    let _auto_forward = AutoPortForwarder::start(dc.clone(), manager, vec![]);
 
     let mut cmd_args = vec![&*config.shell];
     cmd_args.extend(shell_args.args.iter().map(|s| s.as_str()));

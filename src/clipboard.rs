@@ -9,26 +9,35 @@ use tokio::{
     task::JoinHandle,
 };
 
-pub struct SpawnedInfo {
-    pub handle: JoinHandle<Result<()>>,
-    pub shutdown_tx: oneshot::Sender<()>,
+pub struct ClipboardServer {
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    _handle: JoinHandle<Result<()>>,
     pub port: u16,
 }
 
-pub async fn spawn_clipboard_server(port: u16) -> Result<SpawnedInfo> {
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+impl ClipboardServer {
+    pub async fn start(port: u16) -> Result<Self> {
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-    let handle = tokio::spawn(async move {
-        // Populate allowed addresses once at startup
-        let allowed_addresses = Arc::new(populate_allowed_addresses());
-        run_server(shutdown_rx, allowed_addresses, port).await
-    });
+        let handle = tokio::spawn(async move {
+            let allowed_addresses = Arc::new(populate_allowed_addresses());
+            run_server(shutdown_rx, allowed_addresses, port).await
+        });
 
-    Ok(SpawnedInfo {
-        handle,
-        shutdown_tx,
-        port,
-    })
+        Ok(Self {
+            shutdown_tx: Some(shutdown_tx),
+            _handle: handle,
+            port,
+        })
+    }
+}
+
+impl Drop for ClipboardServer {
+    fn drop(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+    }
 }
 
 async fn run_server(

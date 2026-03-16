@@ -13,11 +13,12 @@ use tokio::{process::Child, runtime::Handle, select, signal, sync::Mutex, task, 
 use crate::{
     auto_port_forward::AutoPortForwarder,
     cli::{Args, BuildArgs, NeovimArgs},
-    clipboard::{self, SpawnedInfo},
+    clipboard::ClipboardServer,
     config::Config,
     devcontainer::{DevContainer, RootMode},
     exec, log,
     log::OutputSuppressGuard,
+    port_forwarder::PortForwarder,
 };
 
 pub const SERVER_PLACEHOLDER: &str = "{server}";
@@ -52,58 +53,54 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
         crate::cli::build::main(config, args, &build_args).await?;
     }
 
-    // Run clipboard server for clipboard support if enabled
-    let clipboard_spawned_info = if config.remote.use_clipboard_server {
-        let clipboard_port = dc.find_available_host_port().await?;
-        let info = clipboard::spawn_clipboard_server(clipboard_port).await?;
-        log!("Started": "clipboard server on port {}", info.port);
-        Some(info)
+    // --- Start background services ---
+    // All services are stopped automatically when their guards go out of scope.
+
+    let clipboard = if config.remote.use_clipboard_server {
+        let port = dc.find_available_host_port().await?;
+        let server = ClipboardServer::start(port).await?;
+        log!("Started": "clipboard server on port {}", server.port);
+        Some(server)
     } else {
         None
     };
-    let clipboard_port = clipboard_spawned_info.as_ref().map(|info| info.port);
+    let clipboard_port = clipboard.as_ref().map(|s| s.port);
 
-    defer! {
-        if let Some(SpawnedInfo{handle, shutdown_tx, ..}) = clipboard_spawned_info {
-            task::block_in_place(|| {
-                Handle::current().block_on(async move {
-                    let _ = shutdown_tx.send(());
-                    let _ = handle.await;
-                    log!("Stopped": "clipboard server");
-                });
-            });
-        }
-    }
+    let port_forwarder = Arc::new(PortForwarder::new(dc.clone()));
+
+    // Determine ports for remote UI mode (needed before starting auto-forwarder).
+    let (host_port, container_port) = if neovim_args.no_remote_ui {
+        (None, None)
+    } else if let Some(host_port) = &neovim_args.host_port {
+        let cp = neovim_args
+            .container_port
+            .as_deref()
+            .unwrap_or("54321")
+            .to_string();
+        (Some(host_port.clone()), Some(cp))
+    } else {
+        let auto_host_port = dc.find_available_host_port().await?;
+        println!("Auto-selected host port: {auto_host_port}");
+        (Some(auto_host_port.to_string()), Some("54321".to_string()))
+    };
+
+    let exclude_ports: Vec<u16> = container_port
+        .as_deref()
+        .and_then(|p| p.parse().ok())
+        .into_iter()
+        .collect();
+    let _auto_forwarder =
+        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), exclude_ports);
+
+    // --- Run Neovim ---
 
     if neovim_args.no_remote_ui {
-        // Auto-forward ports while Neovim runs directly in the container.
-        let _auto_forward = AutoPortForwarder::start(dc.clone(), vec![]);
-        // Run Neovim in container
         run_neovim_directly(&dc, args, clipboard_port).await
     } else {
-        // Determine ports (auto-select host port if not specified, container port is always 54321)
-        let (host_port, container_port) = if let Some(host_port) = &neovim_args.host_port {
-            (
-                host_port.clone(),
-                neovim_args
-                    .container_port
-                    .as_deref()
-                    .unwrap_or("54321")
-                    .to_string(),
-            )
-        } else {
-            let auto_host_port = dc.find_available_host_port().await?;
-            println!("Auto-selected host port: {auto_host_port}");
-            (auto_host_port.to_string(), "54321".to_string())
-        };
-
-        // Exclude the Neovim server port from auto-forwarding (it is already forwarded explicitly).
-        let nvim_container_port: u16 = container_port.parse().unwrap_or(54321);
-        let _auto_forward = AutoPortForwarder::start(dc.clone(), vec![nvim_container_port]);
-
-        // Run Neovim server in the container and connect to it. Shutdown gracefully on Ctrl+C
+        let host_port = host_port.unwrap();
+        let container_port = container_port.unwrap();
         select! {
-            result = run_neovim_server_and_attach(config, &dc, args, &host_port, &container_port, clipboard_port) => result,
+            result = run_neovim_server_and_attach(config, &dc, args, &host_port, &container_port, clipboard_port, &port_forwarder) => result,
             _ = signal::ctrl_c() => {
                 log!("Stopping": "due to received Ctrl+C signal");
                 Ok(())
@@ -180,6 +177,7 @@ async fn run_neovim_server_and_attach(
     host_port: &str,
     container_port: &str,
     clipboard_server_port: Option<u16>,
+    manager: &PortForwarder,
 ) -> Result<()> {
     let envs = populate_envs(args, false, clipboard_server_port).await?;
     let mut args = format_envs_to_invocation(&envs);
@@ -202,7 +200,7 @@ async fn run_neovim_server_and_attach(
     }
 
     // Set up port forwarding
-    let guard = dc.forward_port(host_port, container_port).await?;
+    let guard = manager.forward_port(host_port, container_port).await?;
 
     if config.remote.background {
         // Normally we want to remove the port forwarding when the server exits, but in the

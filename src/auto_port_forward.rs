@@ -2,7 +2,11 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::{sync::oneshot, task::JoinHandle, time::sleep};
 
-use crate::{devcontainer::DevContainer, log};
+use crate::{
+    devcontainer::DevContainer,
+    log,
+    port_forwarder::PortForwarder,
+};
 
 /// Watches ports listening inside the container and automatically forwards new ones to the host.
 /// Polling interval is 2 seconds. Port numbers <= 1024 and any ports listed in `exclude_ports`
@@ -19,10 +23,14 @@ impl AutoPortForwarder {
     ///
     /// `exclude_ports` – container-side port numbers that should not be auto-forwarded (e.g. a
     /// Neovim server port that has already been forwarded explicitly).
-    pub fn start(dc: Arc<DevContainer>, exclude_ports: Vec<u16>) -> Self {
+    pub fn start(
+        dc: Arc<DevContainer>,
+        manager: Arc<PortForwarder>,
+        exclude_ports: Vec<u16>,
+    ) -> Self {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        let handle = tokio::spawn(run_auto_forward(dc, shutdown_rx, exclude_ports));
+        let handle = tokio::spawn(run_auto_forward(dc, manager, shutdown_rx, exclude_ports));
 
         Self {
             shutdown_tx: Some(shutdown_tx),
@@ -34,7 +42,7 @@ impl AutoPortForwarder {
 impl Drop for AutoPortForwarder {
     fn drop(&mut self) {
         // Signal the background task to stop. The task itself will drop all PortForwardGuards,
-        // which stops each socat container.
+        // which sends stop messages to the PortForwardManager.
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
@@ -44,11 +52,12 @@ impl Drop for AutoPortForwarder {
 /// Background loop: poll container ports and manage forwarding.
 async fn run_auto_forward(
     dc: Arc<DevContainer>,
+    manager: Arc<PortForwarder>,
     mut shutdown_rx: oneshot::Receiver<()>,
     exclude_ports: Vec<u16>,
 ) {
     // container_port -> (host_port, PortForwardGuard)
-    let mut forwarded: HashMap<u16, (u16, crate::devcontainer::PortForwardGuard)> = HashMap::new();
+    let mut forwarded: HashMap<u16, (u16, crate::port_forwarder::PortForwardGuard)> = HashMap::new();
 
     loop {
         tokio::select! {
@@ -73,8 +82,11 @@ async fn run_auto_forward(
             }
 
             let host_port = choose_host_port(container_port, &dc).await;
-            match dc
-                .forward_port(&host_port.to_string(), &container_port.to_string())
+            match manager
+                .forward_port(
+                    &host_port.to_string(),
+                    &container_port.to_string(),
+                )
                 .await
             {
                 Ok(guard) => {
@@ -95,13 +107,13 @@ async fn run_auto_forward(
             .collect();
         for container_port in closed_ports {
             if let Some((host_port, _guard)) = forwarded.remove(&container_port) {
-                // _guard is dropped here, which stops the socat container
+                // _guard is dropped here, which sends a stop message to the manager
                 log!("AutoForward": "container port {} (host {}) closed, stopping forward", container_port, host_port);
             }
         }
     }
 
-    // Drop all guards, stopping all socat containers.
+    // Drop all guards, sending stop messages to the manager.
     drop(forwarded);
 }
 

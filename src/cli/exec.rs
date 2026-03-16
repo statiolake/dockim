@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
+use miette::{miette, Result, WrapErr};
+
 use crate::{
     auto_port_forward::AutoPortForwarder,
     cli::{Args, ExecArgs},
     config::Config,
     devcontainer::{DevContainer, RootMode},
+    port_forwarder::PortForwarder,
 };
-use miette::{miette, Result, WrapErr};
 
 pub async fn main(_config: &Config, args: &Args, exec_args: &ExecArgs) -> Result<()> {
     let dc = Arc::new(
@@ -21,7 +23,8 @@ pub async fn main(_config: &Config, args: &Args, exec_args: &ExecArgs) -> Result
     dc.up(false, false).await?;
 
     // Automatically forward any ports the container starts listening on while exec runs.
-    let _auto_forward = AutoPortForwarder::start(dc.clone(), vec![]);
+    let manager = Arc::new(PortForwarder::new(dc.clone()));
+    let _auto_forward = AutoPortForwarder::start(dc.clone(), manager, vec![]);
 
     dc.exec(&exec_args.args, RootMode::No)
         .await
