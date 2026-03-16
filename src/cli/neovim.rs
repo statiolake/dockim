@@ -17,6 +17,7 @@ use crate::{
     config::Config,
     devcontainer::{DevContainer, RootMode},
     exec, log,
+    log::OutputSuppressGuard,
 };
 
 pub const SERVER_PLACEHOLDER: &str = "{server}";
@@ -168,6 +169,7 @@ async fn run_neovim_directly(
     let mut args = format_envs_to_invocation(&envs);
     args.push("TERM=screen-256color".to_string());
     args.push("nvim".to_string());
+    let _suppress = OutputSuppressGuard::new();
     dc.exec(&args, RootMode::No).await
 }
 
@@ -275,7 +277,10 @@ async fn run_background_neovim_client(args: &[String]) -> Result<()> {
 
 async fn run_foreground_neovim_client(args: &[String], min_duration: Duration) -> Result<()> {
     let start = Instant::now();
-    let output = exec::exec(args).await;
+    let output = {
+        let _suppress = OutputSuppressGuard::new();
+        exec::exec(args).await
+    };
     let elapsed = start.elapsed();
 
     if elapsed < min_duration {
