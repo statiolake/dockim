@@ -402,21 +402,21 @@ impl ProgressRenderer {
         self.clear_live_region();
 
         let mut stderr = std::io::stderr();
-        let width = self.term_width as usize;
 
+        // Collect and print committed output
+        let mut output_lines: Vec<String> = Vec::new();
         if span.toplevel {
             for step in &span.steps {
-                render_step_prominent(&mut stderr, step, width, self.verbose);
+                collect_step_lines(&mut output_lines, step, "", self.verbose);
             }
         } else {
-            // Print span header
-            let _ = write!(stderr, "{:>10}", span.verb.bright_green());
-            let _ = writeln!(stderr, " {}", span.desc);
-
-            // Print sub-steps
+            output_lines.push(format!("{:>10} {}", span.verb.bright_green(), span.desc));
             for step in &span.steps {
-                render_step_subordinate(&mut stderr, step, width, self.verbose);
+                collect_step_lines(&mut output_lines, step, "    ", self.verbose);
             }
+        }
+        for line in &output_lines {
+            let _ = writeln!(stderr, "{line}");
         }
 
         // Re-render remaining live spans
@@ -465,29 +465,39 @@ impl ProgressRenderer {
 
     fn render_live_region(&mut self) {
         let mut stderr = std::io::stderr();
-        let mut lines = 0;
         let width = self.term_width as usize;
+
+        // Collect all output lines first
+        let mut output_lines: Vec<String> = Vec::new();
 
         for span in self.spans.values() {
             if span.toplevel {
-                // Top-level: no separate header, steps are rendered prominent
                 for step in &span.steps {
-                    lines += render_step_prominent(&mut stderr, step, width, self.verbose);
+                    collect_step_lines(&mut output_lines, step, "", self.verbose);
                 }
             } else {
-                // Span header
-                let _ = write!(stderr, "{:>10}", span.verb.bright_green());
-                let _ = writeln!(stderr, " {}", span.desc);
-                lines += 1;
-
-                // Sub-steps: indented + dim
+                output_lines.push(format!("{:>10} {}", span.verb.bright_green(), span.desc));
                 for step in &span.steps {
-                    lines += render_step_subordinate(&mut stderr, step, width, self.verbose);
+                    collect_step_lines(&mut output_lines, step, "    ", self.verbose);
                 }
             }
         }
 
-        self.rendered_lines = lines;
+        // Write lines, counting physical lines (accounting for wrapping)
+        let mut physical_lines = 0;
+        for line in &output_lines {
+            // Strip ANSI to get display width
+            let display_len = strip_ansi_codes(line).len();
+            let phys = if width > 0 && display_len > width {
+                (display_len + width - 1) / width
+            } else {
+                1
+            };
+            let _ = writeln!(stderr, "{line}");
+            physical_lines += phys;
+        }
+
+        self.rendered_lines = physical_lines;
     }
 
     /// Non-TTY: print events linearly as they arrive, no cursor manipulation.
@@ -521,86 +531,72 @@ impl ProgressRenderer {
     }
 }
 
-/// Render a single step. `indent` is the prefix for each line (e.g. "" for top-level, "    " for subordinate).
-fn render_step(w: &mut impl Write, step: &StepState, indent: &str, width: usize, verbose: bool) -> usize {
-    let mut lines = 0;
-
+/// Collect rendered lines for a step into the output buffer.
+fn collect_step_lines(out: &mut Vec<String>, step: &StepState, indent: &str, verbose: bool) {
     // Icon + verb + desc
     if step.failed {
-        let _ = writeln!(w, "{indent}{} {} {}",
+        out.push(format!("{indent}{} {} {}",
             "✗".red(),
             format!("{:>10}", step.verb).red(),
-            step.desc.red());
+            step.desc.red()));
     } else if step.completed {
         let summary_str = step.summary.as_deref().unwrap_or("");
         if summary_str.is_empty() {
-            let _ = writeln!(w, "{indent}{} {} {}",
+            out.push(format!("{indent}{} {} {}",
                 "✓".green(),
                 format!("{:>10}", step.verb).bright_green(),
-                step.desc);
+                step.desc));
         } else {
-            let _ = writeln!(w, "{indent}{} {} {} {}",
+            out.push(format!("{indent}{} {} {} {}",
                 "✓".green(),
                 format!("{:>10}", step.verb).bright_green(),
                 step.desc,
-                format!("({summary_str})").bright_black());
+                format!("({summary_str})").bright_black()));
         }
     } else {
         // Active / in-progress
-        let _ = writeln!(w, "{indent}{} {} {}",
+        out.push(format!("{indent}{} {} {}",
             "◆".bright_yellow(),
             format!("{:>10}", step.verb).bright_green(),
-            step.desc);
+            step.desc));
     }
-    lines += 1;
 
     // Verbose: raw command args
     if verbose {
         if let Some(ref vl) = step.verbose_line {
-            let _ = writeln!(w, "{indent}    {}", vl.bright_black());
-            lines += 1;
+            out.push(format!("{indent}    {}", vl.bright_black()));
         }
     }
 
     // Failed: dump all output in red
     if step.failed {
         for line in &step.all_lines {
-            let truncated = truncate_str(line, width.saturating_sub(indent.len() + 4));
-            let _ = writeln!(w, "{indent}    {}", truncated.red());
-            lines += 1;
+            out.push(format!("{indent}    {}", line.red()));
         }
     }
 
     // Active: show tail lines
     if !step.completed && !step.failed {
         for tail_line in &step.tail {
-            let truncated = truncate_str(tail_line, width.saturating_sub(indent.len() + 4));
-            let _ = writeln!(w, "{indent}    {}", truncated.bright_black());
-            lines += 1;
+            out.push(format!("{indent}    {}", tail_line.bright_black()));
         }
     }
-
-    // Completed summary already shown on the icon line, nothing more needed
-
-    lines
 }
 
-/// Render a step in prominent style (no indent). For top-level steps.
-fn render_step_prominent(w: &mut impl Write, step: &StepState, width: usize, verbose: bool) -> usize {
-    render_step(w, step, "", width, verbose)
-}
-
-/// Render a step in subordinate style (indented). For steps inside a span.
-fn render_step_subordinate(w: &mut impl Write, step: &StepState, width: usize, verbose: bool) -> usize {
-    render_step(w, step, "    ", width, verbose)
-}
-
-fn truncate_str(s: &str, max_width: usize) -> &str {
-    if s.len() <= max_width {
-        s
-    } else if max_width > 3 {
-        &s[..max_width - 3]
-    } else {
-        &s[..max_width]
+/// Strip ANSI escape codes to get the display width of a string.
+fn strip_ansi_codes(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_escape = false;
+    for c in s.chars() {
+        if in_escape {
+            if c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else if c == '\x1b' {
+            in_escape = true;
+        } else {
+            result.push(c);
+        }
     }
+    result
 }
