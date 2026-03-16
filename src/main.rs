@@ -15,6 +15,7 @@ use tokio::task::JoinSet;
 async fn main() -> Result<()> {
     let args = Args::parse();
     dockim::log::set_verbose(args.verbose);
+    dockim::progress::init(args.verbose);
 
     check_requirements().await?;
     let config = Config::load_config()?;
