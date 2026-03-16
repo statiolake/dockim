@@ -253,11 +253,16 @@ impl ProgressRenderer {
             while let Ok(event) = self.rx.try_recv() {
                 self.handle_event(event);
             }
+            self.auto_commit_finished_toplevel_spans();
             self.render();
         }
     }
 
     fn handle_event(&mut self, event: ProgressEvent) {
+        if !self.is_tty {
+            self.handle_event_linear(event);
+            return;
+        }
         match event {
             ProgressEvent::SpanEnter { id, verb, desc } => {
                 self.spans.insert(
@@ -418,6 +423,24 @@ impl ProgressRenderer {
         self.render_live_region();
     }
 
+    /// Auto-commit toplevel spans where all steps are done (completed or failed).
+    fn auto_commit_finished_toplevel_spans(&mut self) {
+        let finished_ids: Vec<SpanId> = self
+            .spans
+            .iter()
+            .filter(|(_, s)| s.toplevel && !s.steps.is_empty() && s.steps.iter().all(|st| st.completed || st.failed))
+            .map(|(id, _)| *id)
+            .collect();
+
+        for id in finished_ids {
+            if self.is_tty {
+                self.commit_span(id);
+            } else {
+                self.spans.remove(&id);
+            }
+        }
+    }
+
     fn render(&mut self) {
         if !self.is_tty {
             return;
@@ -467,8 +490,35 @@ impl ProgressRenderer {
         self.rendered_lines = lines;
     }
 
-    // Non-TTY rendering is handled per-event in handle_event
-    // by checking is_tty and printing linearly instead
+    /// Non-TTY: print events linearly as they arrive, no cursor manipulation.
+    fn handle_event_linear(&mut self, event: ProgressEvent) {
+        let mut stderr = std::io::stderr();
+        match event {
+            ProgressEvent::SpanEnter { verb, desc, .. } => {
+                let _ = write!(stderr, "{:>10}", verb);
+                let _ = writeln!(stderr, " {desc}");
+            }
+            ProgressEvent::Step { verb, desc, .. } => {
+                let _ = writeln!(stderr, "  {verb:>10} {desc}");
+            }
+            ProgressEvent::StepDone { summary, .. } => {
+                if let Some(s) = summary {
+                    let _ = writeln!(stderr, "  -> {s}");
+                }
+            }
+            ProgressEvent::StepFailed { .. } => {}
+            ProgressEvent::TailLine { .. } => {} // skip tail in non-TTY
+            ProgressEvent::Verbose { line, .. } => {
+                if self.verbose {
+                    let _ = writeln!(stderr, "    {line}");
+                }
+            }
+            ProgressEvent::Log { verb, desc } => {
+                let _ = writeln!(stderr, "{verb:>10} {desc}");
+            }
+            ProgressEvent::SpanExit { .. } => {}
+        }
+    }
 }
 
 /// Render a single step. `indent` is the prefix for each line (e.g. "" for top-level, "    " for subordinate).
