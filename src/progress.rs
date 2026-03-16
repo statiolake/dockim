@@ -471,107 +471,78 @@ impl ProgressRenderer {
     // by checking is_tty and printing linearly instead
 }
 
-/// Render a step in prominent style (green verb, normal text). For top-level steps.
-fn render_step_prominent(w: &mut impl Write, step: &StepState, width: usize, verbose: bool) -> usize {
+/// Render a single step. `indent` is the prefix for each line (e.g. "" for top-level, "    " for subordinate).
+fn render_step(w: &mut impl Write, step: &StepState, indent: &str, width: usize, verbose: bool) -> usize {
     let mut lines = 0;
-    if step.failed {
-        let _ = write!(w, "    {} {:>10}", "✗".red(), step.verb.red());
-        let _ = writeln!(w, " {}", step.desc.red());
-        lines += 1;
-        for line in &step.all_lines {
-            let truncated = truncate_str(line, width.saturating_sub(8));
-            let _ = writeln!(w, "        {}", truncated.red());
-            lines += 1;
-        }
-    } else if step.completed {
-        let _ = write!(w, "    {} {:>10}", "✓".green(), step.verb.bright_green());
-        let summary = step.summary.as_deref().unwrap_or("");
-        if summary.is_empty() {
-            let _ = writeln!(w, " {}", step.desc);
-        } else {
-            let _ = writeln!(w, " {} {}", step.desc, format!("({summary})").bright_black());
-        }
-        lines += 1;
-        if verbose {
-            if let Some(ref vl) = step.verbose_line {
-                let _ = writeln!(w, "               {}", vl.bright_black());
-                lines += 1;
-            }
-        }
-    } else {
-        // Active
-        let _ = write!(w, "{:>10}", step.verb.bright_green());
-        let _ = writeln!(w, " {}", step.desc);
-        lines += 1;
-        if verbose {
-            if let Some(ref vl) = step.verbose_line {
-                let _ = writeln!(w, "               {}", vl.bright_black());
-                lines += 1;
-            }
-        }
-        for tail_line in &step.tail {
-            let truncated = truncate_str(tail_line, width.saturating_sub(12));
-            let _ = writeln!(w, "            {}", truncated.bright_black());
-            lines += 1;
-        }
-    }
-    lines
-}
 
-/// Render a step in subordinate style (dim, indented). For steps inside a span.
-fn render_step_subordinate(w: &mut impl Write, step: &StepState, width: usize, verbose: bool) -> usize {
-    let mut lines = 0;
+    // Icon + verb + desc
     if step.failed {
-        let _ = writeln!(w, "    {} {} {}",
+        let _ = writeln!(w, "{indent}{} {} {}",
             "✗".red(),
             format!("{:>10}", step.verb).red(),
             step.desc.red());
-        lines += 1;
-        for line in &step.all_lines {
-            let truncated = truncate_str(line, width.saturating_sub(8));
-            let _ = writeln!(w, "        {}", truncated.red());
-            lines += 1;
-        }
     } else if step.completed {
-        let summary = step.summary.as_deref().unwrap_or("");
-        if summary.is_empty() {
-            let _ = writeln!(w, "    {} {} {}",
+        let summary_str = step.summary.as_deref().unwrap_or("");
+        if summary_str.is_empty() {
+            let _ = writeln!(w, "{indent}{} {} {}",
                 "✓".green(),
-                format!("{:>10}", step.verb).bright_black(),
-                step.desc.bright_black());
+                format!("{:>10}", step.verb).bright_green(),
+                step.desc);
         } else {
-            let _ = writeln!(w, "    {} {} {} {}",
+            let _ = writeln!(w, "{indent}{} {} {} {}",
                 "✓".green(),
-                format!("{:>10}", step.verb).bright_black(),
-                step.desc.bright_black(),
-                format!("({summary})").bright_black());
-        }
-        lines += 1;
-        if verbose {
-            if let Some(ref vl) = step.verbose_line {
-                let _ = writeln!(w, "               {}", vl.bright_black());
-                lines += 1;
-            }
+                format!("{:>10}", step.verb).bright_green(),
+                step.desc,
+                format!("({summary_str})").bright_black());
         }
     } else {
-        // Active
-        let _ = writeln!(w, "    {} {}",
-            format!("{:>10}", step.verb).bright_black(),
-            step.desc.bright_black());
-        lines += 1;
-        if verbose {
-            if let Some(ref vl) = step.verbose_line {
-                let _ = writeln!(w, "               {}", vl.bright_black());
-                lines += 1;
-            }
-        }
-        for tail_line in &step.tail {
-            let truncated = truncate_str(tail_line, width.saturating_sub(12));
-            let _ = writeln!(w, "            {}", truncated.bright_black());
+        // Active / in-progress
+        let _ = writeln!(w, "{indent}{} {} {}",
+            "◆".bright_yellow(),
+            format!("{:>10}", step.verb).bright_green(),
+            step.desc);
+    }
+    lines += 1;
+
+    // Verbose: raw command args
+    if verbose {
+        if let Some(ref vl) = step.verbose_line {
+            let _ = writeln!(w, "{indent}    {}", vl.bright_black());
             lines += 1;
         }
     }
+
+    // Failed: dump all output in red
+    if step.failed {
+        for line in &step.all_lines {
+            let truncated = truncate_str(line, width.saturating_sub(indent.len() + 4));
+            let _ = writeln!(w, "{indent}    {}", truncated.red());
+            lines += 1;
+        }
+    }
+
+    // Active: show tail lines
+    if !step.completed && !step.failed {
+        for tail_line in &step.tail {
+            let truncated = truncate_str(tail_line, width.saturating_sub(indent.len() + 4));
+            let _ = writeln!(w, "{indent}    {}", truncated.bright_black());
+            lines += 1;
+        }
+    }
+
+    // Completed summary already shown on the icon line, nothing more needed
+
     lines
+}
+
+/// Render a step in prominent style (no indent). For top-level steps.
+fn render_step_prominent(w: &mut impl Write, step: &StepState, width: usize, verbose: bool) -> usize {
+    render_step(w, step, "", width, verbose)
+}
+
+/// Render a step in subordinate style (indented). For steps inside a span.
+fn render_step_subordinate(w: &mut impl Write, step: &StepState, width: usize, verbose: bool) -> usize {
+    render_step(w, step, "    ", width, verbose)
 }
 
 fn truncate_str(s: &str, max_width: usize) -> &str {
