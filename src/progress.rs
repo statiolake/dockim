@@ -71,6 +71,8 @@ pub enum ProgressEvent {
     /// Current step within span succeeded; clear its tail
     StepDone {
         span_id: Option<SpanId>,
+        /// Optional short summary to show next to the checkmark (e.g. version)
+        summary: Option<String>,
     },
     /// Current step failed; dump all output in red
     StepFailed {
@@ -128,6 +130,8 @@ struct StepState {
     desc: String,
     tail: Vec<String>,
     all_lines: Vec<String>,
+    verbose_line: Option<String>,
+    summary: Option<String>,
     completed: bool,
     failed: bool,
 }
@@ -136,6 +140,9 @@ struct SpanState {
     verb: String,
     desc: String,
     steps: Vec<StepState>,
+    /// True if this is an auto-created span for a top-level exec (no LogSpan).
+    /// Renders without a separate header (the step itself is the header).
+    toplevel: bool,
 }
 
 struct ProgressRenderer {
@@ -183,6 +190,7 @@ impl ProgressRenderer {
                         verb,
                         desc,
                         steps: Vec::new(),
+                        toplevel: false,
                     },
                 );
             }
@@ -198,24 +206,28 @@ impl ProgressRenderer {
                             desc,
                             tail: Vec::new(),
                             all_lines: Vec::new(),
+                            verbose_line: None,
+                            summary: None,
                             completed: false,
                             failed: false,
                         });
                     }
                 } else {
-                    // Top-level step without a span: create an ephemeral span
+                    // Top-level step without a span: create an ephemeral toplevel span
                     let id = SpanId::next();
                     let mut span = SpanState {
                         verb: verb.clone(),
                         desc: desc.clone(),
                         steps: Vec::new(),
+                        toplevel: true,
                     };
-                    // No sub-steps for top-level; the span header IS the step
                     span.steps.push(StepState {
                         verb,
                         desc,
                         tail: Vec::new(),
                         all_lines: Vec::new(),
+                        verbose_line: None,
+                        summary: None,
                         completed: false,
                         failed: false,
                     });
@@ -237,7 +249,7 @@ impl ProgressRenderer {
                     }
                 }
             }
-            ProgressEvent::StepDone { span_id } => {
+            ProgressEvent::StepDone { span_id, summary } => {
                 let span = match span_id {
                     Some(id) => self.spans.get_mut(&id),
                     None => self.spans.values_mut().last(),
@@ -245,6 +257,7 @@ impl ProgressRenderer {
                 if let Some(span) = span {
                     if let Some(step) = span.steps.last_mut() {
                         step.completed = true;
+                        step.summary = summary;
                         step.tail.clear();
                     }
                 }
@@ -279,7 +292,7 @@ impl ProgressRenderer {
                 };
                 if let Some(span) = span {
                     if let Some(step) = span.steps.last_mut() {
-                        step.all_lines.push(line);
+                        step.verbose_line = Some(line);
                     }
                 }
             }
@@ -308,39 +321,20 @@ impl ProgressRenderer {
         self.clear_live_region();
 
         let mut stderr = std::io::stderr();
+        let width = self.term_width as usize;
 
-        // Print span header
-        let _ = write!(stderr, "{:>10}", span.verb.bright_green());
-        let _ = writeln!(stderr, " {}", span.desc);
+        if span.toplevel {
+            for step in &span.steps {
+                render_step_prominent(&mut stderr, step, width, self.verbose);
+            }
+        } else {
+            // Print span header
+            let _ = write!(stderr, "{:>10}", span.verb.bright_green());
+            let _ = writeln!(stderr, " {}", span.desc);
 
-        // Print completed steps
-        for step in &span.steps {
-            if step.failed {
-                let _ = writeln!(
-                    stderr,
-                    "    {} {} {}",
-                    "✗".red(),
-                    format!("{:>10}", step.verb).red(),
-                    step.desc.red()
-                );
-                for line in &step.all_lines {
-                    let _ = writeln!(stderr, "        {}", line.red());
-                }
-            } else if step.completed {
-                let _ = writeln!(
-                    stderr,
-                    "    {} {} {}",
-                    "✓".green(),
-                    format!("{:>10}", step.verb).bright_black(),
-                    step.desc.bright_black()
-                );
-            } else {
-                let _ = writeln!(
-                    stderr,
-                    "    {} {}",
-                    format!("{:>10}", step.verb).bright_black(),
-                    step.desc.bright_black()
-                );
+            // Print sub-steps
+            for step in &span.steps {
+                render_step_subordinate(&mut stderr, step, width, self.verbose);
             }
         }
 
@@ -376,54 +370,20 @@ impl ProgressRenderer {
         let width = self.term_width as usize;
 
         for span in self.spans.values() {
-            // Span header
-            let header = format!("{:>10} {}", span.verb, span.desc);
-            let _ = write!(stderr, "{:>10}", span.verb.bright_green());
-            let _ = writeln!(stderr, " {}", span.desc);
-            lines += 1;
-            let _ = header; // suppress unused
+            if span.toplevel {
+                // Top-level: no separate header, steps are rendered prominent
+                for step in &span.steps {
+                    lines += render_step_prominent(&mut stderr, step, width, self.verbose);
+                }
+            } else {
+                // Span header
+                let _ = write!(stderr, "{:>10}", span.verb.bright_green());
+                let _ = writeln!(stderr, " {}", span.desc);
+                lines += 1;
 
-            // Steps
-            for step in &span.steps {
-                if step.failed {
-                    let _ = writeln!(
-                        stderr,
-                        "    {} {} {}",
-                        "✗".red(),
-                        format!("{:>10}", step.verb).red(),
-                        step.desc.red()
-                    );
-                    lines += 1;
-                    for line in &step.all_lines {
-                        let truncated = truncate_str(line, width.saturating_sub(8));
-                        let _ = writeln!(stderr, "        {}", truncated.red());
-                        lines += 1;
-                    }
-                } else if step.completed {
-                    let _ = writeln!(
-                        stderr,
-                        "    {} {} {}",
-                        "✓".green(),
-                        format!("{:>10}", step.verb).bright_black(),
-                        step.desc.bright_black()
-                    );
-                    lines += 1;
-                } else {
-                    // Active step
-                    let _ = writeln!(
-                        stderr,
-                        "    {} {}",
-                        format!("{:>10}", step.verb).bright_black(),
-                        step.desc.bright_black()
-                    );
-                    lines += 1;
-
-                    // Tail lines
-                    for tail_line in &step.tail {
-                        let truncated = truncate_str(tail_line, width.saturating_sub(12));
-                        let _ = writeln!(stderr, "            {}", truncated.bright_black());
-                        lines += 1;
-                    }
+                // Sub-steps: indented + dim
+                for step in &span.steps {
+                    lines += render_step_subordinate(&mut stderr, step, width, self.verbose);
                 }
             }
         }
@@ -433,6 +393,109 @@ impl ProgressRenderer {
 
     // Non-TTY rendering is handled per-event in handle_event
     // by checking is_tty and printing linearly instead
+}
+
+/// Render a step in prominent style (green verb, normal text). For top-level steps.
+fn render_step_prominent(w: &mut impl Write, step: &StepState, width: usize, verbose: bool) -> usize {
+    let mut lines = 0;
+    if step.failed {
+        let _ = write!(w, "    {} {:>10}", "✗".red(), step.verb.red());
+        let _ = writeln!(w, " {}", step.desc.red());
+        lines += 1;
+        for line in &step.all_lines {
+            let truncated = truncate_str(line, width.saturating_sub(8));
+            let _ = writeln!(w, "        {}", truncated.red());
+            lines += 1;
+        }
+    } else if step.completed {
+        let _ = write!(w, "    {} {:>10}", "✓".green(), step.verb.bright_green());
+        let summary = step.summary.as_deref().unwrap_or("");
+        if summary.is_empty() {
+            let _ = writeln!(w, " {}", step.desc);
+        } else {
+            let _ = writeln!(w, " {} {}", step.desc, format!("({summary})").bright_black());
+        }
+        lines += 1;
+        if verbose {
+            if let Some(ref vl) = step.verbose_line {
+                let _ = writeln!(w, "               {}", vl.bright_black());
+                lines += 1;
+            }
+        }
+    } else {
+        // Active
+        let _ = write!(w, "{:>10}", step.verb.bright_green());
+        let _ = writeln!(w, " {}", step.desc);
+        lines += 1;
+        if verbose {
+            if let Some(ref vl) = step.verbose_line {
+                let _ = writeln!(w, "               {}", vl.bright_black());
+                lines += 1;
+            }
+        }
+        for tail_line in &step.tail {
+            let truncated = truncate_str(tail_line, width.saturating_sub(12));
+            let _ = writeln!(w, "            {}", truncated.bright_black());
+            lines += 1;
+        }
+    }
+    lines
+}
+
+/// Render a step in subordinate style (dim, indented). For steps inside a span.
+fn render_step_subordinate(w: &mut impl Write, step: &StepState, width: usize, verbose: bool) -> usize {
+    let mut lines = 0;
+    if step.failed {
+        let _ = writeln!(w, "    {} {} {}",
+            "✗".red(),
+            format!("{:>10}", step.verb).red(),
+            step.desc.red());
+        lines += 1;
+        for line in &step.all_lines {
+            let truncated = truncate_str(line, width.saturating_sub(8));
+            let _ = writeln!(w, "        {}", truncated.red());
+            lines += 1;
+        }
+    } else if step.completed {
+        let summary = step.summary.as_deref().unwrap_or("");
+        if summary.is_empty() {
+            let _ = writeln!(w, "    {} {} {}",
+                "✓".green(),
+                format!("{:>10}", step.verb).bright_black(),
+                step.desc.bright_black());
+        } else {
+            let _ = writeln!(w, "    {} {} {} {}",
+                "✓".green(),
+                format!("{:>10}", step.verb).bright_black(),
+                step.desc.bright_black(),
+                format!("({summary})").bright_black());
+        }
+        lines += 1;
+        if verbose {
+            if let Some(ref vl) = step.verbose_line {
+                let _ = writeln!(w, "               {}", vl.bright_black());
+                lines += 1;
+            }
+        }
+    } else {
+        // Active
+        let _ = writeln!(w, "    {} {}",
+            format!("{:>10}", step.verb).bright_black(),
+            step.desc.bright_black());
+        lines += 1;
+        if verbose {
+            if let Some(ref vl) = step.verbose_line {
+                let _ = writeln!(w, "               {}", vl.bright_black());
+                lines += 1;
+            }
+        }
+        for tail_line in &step.tail {
+            let truncated = truncate_str(tail_line, width.saturating_sub(12));
+            let _ = writeln!(w, "            {}", truncated.bright_black());
+            lines += 1;
+        }
+    }
+    lines
 }
 
 fn truncate_str(s: &str, max_width: usize) -> &str {

@@ -54,7 +54,7 @@ pub async fn exec<S: AsRef<str> + Debug>(
 
     let span_id = progress::current_span_id();
     if status.success() {
-        progress::handle().send(ProgressEvent::StepDone { span_id });
+        progress::handle().send(ProgressEvent::StepDone { span_id, summary: None });
     } else {
         progress::handle().send(ProgressEvent::StepFailed { span_id });
     }
@@ -87,7 +87,7 @@ pub async fn with_stdin<S: AsRef<str> + Debug>(
 
     let span_id = progress::current_span_id();
     if status.success() {
-        progress::handle().send(ProgressEvent::StepDone { span_id });
+        progress::handle().send(ProgressEvent::StepDone { span_id, summary: None });
     } else {
         progress::handle().send(ProgressEvent::StepFailed { span_id });
     }
@@ -131,7 +131,7 @@ pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(
 
     let span_id = progress::current_span_id();
     if status.success() {
-        progress::handle().send(ProgressEvent::StepDone { span_id });
+        progress::handle().send(ProgressEvent::StepDone { span_id, summary: None });
     } else {
         progress::handle().send(ProgressEvent::StepFailed { span_id });
     }
@@ -160,9 +160,15 @@ pub async fn capturing_stdout<S: AsRef<str> + Debug>(
         .into_diagnostic()
         .wrap_err("exec failed")?;
 
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+
     let span_id = progress::current_span_id();
     if out.status.success() {
-        progress::handle().send(ProgressEvent::StepDone { span_id });
+        // Use first line of stdout as summary (e.g. version string)
+        let summary = stdout.lines().next()
+            .map(|l| l.trim().to_string())
+            .filter(|s| !s.is_empty());
+        progress::handle().send(ProgressEvent::StepDone { span_id, summary });
     } else {
         progress::handle().send(ProgressEvent::StepFailed { span_id });
     }
@@ -171,8 +177,6 @@ pub async fn capturing_stdout<S: AsRef<str> + Debug>(
         out.status.success(),
         "Command returned non-successful status"
     );
-
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
 
     Ok(stdout)
 }
@@ -219,7 +223,7 @@ pub async fn capturing<S: AsRef<str> + Debug>(
 
     let span_id = progress::current_span_id();
     if out.status.success() {
-        progress::handle().send(ProgressEvent::StepDone { span_id });
+        progress::handle().send(ProgressEvent::StepDone { span_id, summary: None });
     } else {
         progress::handle().send(ProgressEvent::StepFailed { span_id });
     }
@@ -312,7 +316,7 @@ pub async fn exec_with_tail<S: AsRef<str> + Debug>(
     let status = child.wait().await.into_diagnostic()?;
 
     if status.success() {
-        handle.send(ProgressEvent::StepDone { span_id });
+        handle.send(ProgressEvent::StepDone { span_id, summary: None });
         Ok(())
     } else {
         handle.send(ProgressEvent::StepFailed { span_id });
