@@ -9,6 +9,7 @@ use dockim::{
     exec,
 };
 use miette::{bail, Result};
+use tokio::task::JoinSet;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,7 +17,10 @@ async fn main() -> Result<()> {
 
     check_requirements().await?;
     let config = Config::load_config()?;
-    match &args.subcommand {
+
+    let mut join_set = JoinSet::new();
+
+    let result = match &args.subcommand {
         Subcommand::Init(init_args) => init::main(&config, &args, init_args).await,
         Subcommand::InitConfig(init_config_args) => {
             init_config::main(&config, &args, init_config_args).await
@@ -26,19 +30,32 @@ async fn main() -> Result<()> {
         }
         Subcommand::Up(up_args) => up::main(&config, &args, up_args).await,
         Subcommand::Build(build_args) => build::main(&config, &args, build_args).await,
-        Subcommand::Neovim(neovim_args) => neovim::main(&config, &args, neovim_args).await,
-        Subcommand::Shell(shell_args) => shell::main(&config, &args, shell_args).await,
+        Subcommand::Neovim(neovim_args) => {
+            neovim::main(&config, &args, neovim_args, &mut join_set).await
+        }
+        Subcommand::Shell(shell_args) => {
+            shell::main(&config, &args, shell_args, &mut join_set).await
+        }
         Subcommand::Bash(bash_args) => bash::main(&config, &args, bash_args).await,
-        Subcommand::Exec(exec_args) => cli_exec::main(&config, &args, exec_args).await,
-        Subcommand::Port(port_args) => port::main(&config, &args, port_args).await,
+        Subcommand::Exec(exec_args) => {
+            cli_exec::main(&config, &args, exec_args, &mut join_set).await
+        }
+        Subcommand::Port(port_args) => {
+            port::main(&config, &args, port_args, &mut join_set).await
+        }
         Subcommand::Ps(ps_args) => ps::main(&config, &args, ps_args).await,
         Subcommand::Ls(ls_args) => ls::main(&config, &args, ls_args).await,
         Subcommand::Stop(stop_args) => stop::main(&config, &args, stop_args).await,
         Subcommand::Down(down_args) => down::main(&config, &args, down_args).await,
         Subcommand::ClipboardServer(clipboard_server_args) => {
-            clipboard_server::main(&config, &args, clipboard_server_args).await
+            clipboard_server::main(&config, &args, clipboard_server_args, &mut join_set).await
         }
-    }
+    };
+
+    // Wait for all background tasks (port-forwarding cleanup, etc.) to complete.
+    join_set.join_all().await;
+
+    result
 }
 
 async fn check_requirements() -> Result<()> {

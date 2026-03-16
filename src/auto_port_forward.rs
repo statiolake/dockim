@@ -1,21 +1,20 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use tokio::{sync::oneshot, task::JoinHandle, time::sleep};
+use tokio::{sync::oneshot, task::JoinSet, time::sleep};
 
 use crate::{
     devcontainer::DevContainer,
     log,
-    port_forwarder::PortForwarder,
+    port_forwarder::{PortForwardGuard, PortForwarder},
 };
 
 /// Watches ports listening inside the container and automatically forwards new ones to the host.
 /// Polling interval is 2 seconds. Port numbers <= 1024 and any ports listed in `exclude_ports`
 /// are ignored.
 ///
-/// All forwarded ports are cleaned up automatically when this struct is dropped.
+/// All forwarded ports are cleaned up automatically when `shutdown()` is called (or on `Drop`).
 pub struct AutoPortForwarder {
-    shutdown_tx: Option<oneshot::Sender<()>>,
-    _handle: Option<JoinHandle<()>>,
+    shutdown_tx: std::sync::Mutex<Option<oneshot::Sender<()>>>,
 }
 
 impl AutoPortForwarder {
@@ -27,25 +26,27 @@ impl AutoPortForwarder {
         dc: Arc<DevContainer>,
         manager: Arc<PortForwarder>,
         exclude_ports: Vec<u16>,
+        join_set: &mut JoinSet<()>,
     ) -> Self {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        let handle = tokio::spawn(run_auto_forward(dc, manager, shutdown_rx, exclude_ports));
+        join_set.spawn(run_auto_forward(dc, manager, shutdown_rx, exclude_ports));
 
         Self {
-            shutdown_tx: Some(shutdown_tx),
-            _handle: Some(handle),
+            shutdown_tx: std::sync::Mutex::new(Some(shutdown_tx)),
+        }
+    }
+
+    pub fn shutdown(&self) {
+        if let Some(tx) = self.shutdown_tx.lock().unwrap().take() {
+            let _ = tx.send(());
         }
     }
 }
 
 impl Drop for AutoPortForwarder {
     fn drop(&mut self) {
-        // Signal the background task to stop. The task itself will drop all PortForwardGuards,
-        // which sends stop messages to the PortForwardManager.
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
+        self.shutdown();
     }
 }
 
@@ -56,8 +57,7 @@ async fn run_auto_forward(
     mut shutdown_rx: oneshot::Receiver<()>,
     exclude_ports: Vec<u16>,
 ) {
-    // container_port -> (host_port, PortForwardGuard)
-    let mut forwarded: HashMap<u16, (u16, crate::port_forwarder::PortForwardGuard)> = HashMap::new();
+    let mut forwarded: HashMap<u16, (u16, PortForwardGuard)> = HashMap::new();
 
     loop {
         tokio::select! {

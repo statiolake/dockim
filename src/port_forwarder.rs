@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
 use serde::Deserialize;
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task::JoinSet};
 
 use crate::{
     devcontainer::{DevContainer, ForwardedPort},
@@ -11,27 +11,30 @@ use crate::{
 
 /// Centralized port-forwarding manager.
 ///
-/// Owns a background task that processes socat container stop requests.
-/// Guards created via this manager send a stop message on drop instead of blocking.
+/// Processes socat container stop requests in a background task spawned into the caller's
+/// `JoinSet`. Call `shutdown()` (or let `Drop` call it) to close the channel, then
+/// `join_set.join_all().await` to wait for all `docker stop` commands to complete.
 pub struct PortForwarder {
     dc: Arc<DevContainer>,
-    stop_tx: mpsc::UnboundedSender<String>,
-    _handle: tokio::task::JoinHandle<()>,
+    stop_tx: std::sync::Mutex<Option<mpsc::UnboundedSender<String>>>,
 }
 
 impl PortForwarder {
-    pub fn new(dc: Arc<DevContainer>) -> Self {
+    pub fn new(dc: Arc<DevContainer>, join_set: &mut JoinSet<()>) -> Self {
         let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<String>();
-        let handle = tokio::spawn(async move {
+        join_set.spawn(async move {
             while let Some(container_name) = stop_rx.recv().await {
                 let _ = exec::exec(&["docker", "stop", &container_name]).await;
             }
         });
         Self {
             dc,
-            stop_tx,
-            _handle: handle,
+            stop_tx: std::sync::Mutex::new(Some(stop_tx)),
         }
+    }
+
+    pub fn shutdown(&self) {
+        self.stop_tx.lock().unwrap().take();
     }
 
     pub async fn forward_port(
@@ -175,9 +178,14 @@ impl PortForwarder {
     }
 
     fn create_guard(&self, socat_container_name: String) -> PortForwardGuard {
+        let stop_tx = self.stop_tx.lock().unwrap();
+        let stop_tx = stop_tx
+            .as_ref()
+            .expect("cannot create guard after shutdown")
+            .clone();
         PortForwardGuard {
             socat_container_name,
-            stop_tx: self.stop_tx.clone(),
+            stop_tx,
         }
     }
 
@@ -192,6 +200,12 @@ impl PortForwarder {
             "dockim-{}-socat-{}",
             up_output.container_id, host_port
         ))
+    }
+}
+
+impl Drop for PortForwarder {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 

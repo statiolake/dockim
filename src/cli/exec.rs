@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use miette::{miette, Result, WrapErr};
+use tokio::task;
 
 use crate::{
     auto_port_forward::AutoPortForwarder,
@@ -10,7 +11,12 @@ use crate::{
     port_forwarder::PortForwarder,
 };
 
-pub async fn main(_config: &Config, args: &Args, exec_args: &ExecArgs) -> Result<()> {
+pub async fn main(
+    _config: &Config,
+    args: &Args,
+    exec_args: &ExecArgs,
+    join_set: &mut task::JoinSet<()>,
+) -> Result<()> {
     let dc = Arc::new(
         DevContainer::new(
             args.resolve_workspace_folder()?,
@@ -22,9 +28,9 @@ pub async fn main(_config: &Config, args: &Args, exec_args: &ExecArgs) -> Result
 
     dc.up(false, false).await?;
 
-    // Automatically forward any ports the container starts listening on while exec runs.
-    let manager = Arc::new(PortForwarder::new(dc.clone()));
-    let _auto_forward = AutoPortForwarder::start(dc.clone(), manager, vec![]);
+    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), join_set));
+    let _auto_forwarder =
+        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], join_set);
 
     dc.exec(&exec_args.args, RootMode::No)
         .await
@@ -32,7 +38,5 @@ pub async fn main(_config: &Config, args: &Args, exec_args: &ExecArgs) -> Result
             help = "try `dockim build --rebuild` first",
             "failed to execute `{:?}` on the container",
             exec_args.args,
-        ))?;
-
-    Ok(())
+        ))
 }

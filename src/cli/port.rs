@@ -2,6 +2,7 @@ use std::{mem, sync::Arc};
 
 use itertools::Itertools;
 use miette::{bail, Context, Result};
+use tokio::task;
 
 use crate::{
     cli::{Args, PortAddArgs, PortArgs, PortRmArgs, PortSubcommand},
@@ -10,7 +11,12 @@ use crate::{
     port_forwarder::PortForwarder,
 };
 
-pub async fn main(_config: &Config, args: &Args, port_args: &PortArgs) -> Result<()> {
+pub async fn main(
+    _config: &Config,
+    args: &Args,
+    port_args: &PortArgs,
+    join_set: &mut task::JoinSet<()>,
+) -> Result<()> {
     let dc = Arc::new(
         DevContainer::new(
             args.resolve_workspace_folder()?,
@@ -22,7 +28,7 @@ pub async fn main(_config: &Config, args: &Args, port_args: &PortArgs) -> Result
 
     dc.up(false, false).await?;
 
-    let forwarder = PortForwarder::new(dc);
+    let forwarder = PortForwarder::new(dc, join_set);
 
     match &port_args.subcommand {
         PortSubcommand::Add(add_args) => add_port(&forwarder, add_args).await,

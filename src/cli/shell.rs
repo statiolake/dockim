@@ -1,17 +1,23 @@
 use std::sync::Arc;
 
 use miette::{miette, Result, WrapErr};
+use tokio::task;
 
 use crate::{
     auto_port_forward::AutoPortForwarder,
     cli::{Args, BuildArgs, ShellArgs},
     config::Config,
     devcontainer::{DevContainer, RootMode},
-    port_forwarder::PortForwarder,
     log,
+    port_forwarder::PortForwarder,
 };
 
-pub async fn main(config: &Config, args: &Args, shell_args: &ShellArgs) -> Result<()> {
+pub async fn main(
+    config: &Config,
+    args: &Args,
+    shell_args: &ShellArgs,
+    join_set: &mut task::JoinSet<()>,
+) -> Result<()> {
     let dc = Arc::new(
         DevContainer::new(
             args.resolve_workspace_folder()?,
@@ -39,9 +45,9 @@ pub async fn main(config: &Config, args: &Args, shell_args: &ShellArgs) -> Resul
         crate::cli::build::main(config, args, &build_args).await?;
     }
 
-    // Automatically forward any ports the container starts listening on while the shell runs.
-    let manager = Arc::new(PortForwarder::new(dc.clone()));
-    let _auto_forward = AutoPortForwarder::start(dc.clone(), manager, vec![]);
+    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), join_set));
+    let _auto_forwarder =
+        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], join_set);
 
     let mut cmd_args = vec![&*config.shell];
     cmd_args.extend(shell_args.args.iter().map(|s| s.as_str()));
@@ -49,7 +55,5 @@ pub async fn main(config: &Config, args: &Args, shell_args: &ShellArgs) -> Resul
         help = "try `dockim build --rebuild` first",
         "failed to execute `{}` on the container",
         config.shell
-    ))?;
-
-    Ok(())
+    ))
 }

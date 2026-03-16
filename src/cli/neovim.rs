@@ -25,7 +25,12 @@ pub const SERVER_PLACEHOLDER: &str = "{server}";
 pub const CONTAINER_ID_PLACEHOLDER: &str = "{container_id}";
 pub const WORKSPACE_FOLDER_PLACEHOLDER: &str = "{workspace_folder}";
 
-pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Result<()> {
+pub async fn main(
+    config: &Config,
+    args: &Args,
+    neovim_args: &NeovimArgs,
+    join_set: &mut task::JoinSet<()>,
+) -> Result<()> {
     let dc = Arc::new(
         DevContainer::new(
             args.resolve_workspace_folder()?,
@@ -54,11 +59,12 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
     }
 
     // --- Start background services ---
-    // All services are stopped automatically when their guards go out of scope.
+    // Services are dropped at the end of this function, sending shutdown signals.
+    // The caller awaits `join_set.join_all()` to wait for all tasks to complete.
 
     let clipboard = if config.remote.use_clipboard_server {
         let port = dc.find_available_host_port().await?;
-        let server = ClipboardServer::start(port).await?;
+        let server = ClipboardServer::start(port, join_set).await?;
         log!("Started": "clipboard server on port {}", server.port);
         Some(server)
     } else {
@@ -66,7 +72,7 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
     };
     let clipboard_port = clipboard.as_ref().map(|s| s.port);
 
-    let port_forwarder = Arc::new(PortForwarder::new(dc.clone()));
+    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), join_set));
 
     // Determine ports for remote UI mode (needed before starting auto-forwarder).
     let (host_port, container_port) = if neovim_args.no_remote_ui {
@@ -90,7 +96,7 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
         .into_iter()
         .collect();
     let _auto_forwarder =
-        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), exclude_ports);
+        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), exclude_ports, join_set);
 
     // --- Run Neovim ---
 
@@ -107,6 +113,9 @@ pub async fn main(config: &Config, args: &Args, neovim_args: &NeovimArgs) -> Res
             }
         }
     }
+
+    // _auto_forwarder, port_forwarder, clipboard are dropped here → shutdown signals sent.
+    // Caller's join_set.join_all() waits for all tasks to complete.
 }
 
 async fn populate_envs(

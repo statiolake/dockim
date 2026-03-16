@@ -6,37 +6,39 @@ use tokio::{
     net::{TcpListener, TcpStream},
     process::Command,
     sync::oneshot,
-    task::JoinHandle,
+    task::JoinSet,
 };
 
 pub struct ClipboardServer {
-    shutdown_tx: Option<oneshot::Sender<()>>,
-    _handle: JoinHandle<Result<()>>,
+    shutdown_tx: std::sync::Mutex<Option<oneshot::Sender<()>>>,
     pub port: u16,
 }
 
 impl ClipboardServer {
-    pub async fn start(port: u16) -> Result<Self> {
+    pub async fn start(port: u16, join_set: &mut JoinSet<()>) -> Result<Self> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        let handle = tokio::spawn(async move {
+        join_set.spawn(async move {
             let allowed_addresses = Arc::new(populate_allowed_addresses());
-            run_server(shutdown_rx, allowed_addresses, port).await
+            let _ = run_server(shutdown_rx, allowed_addresses, port).await;
         });
 
         Ok(Self {
-            shutdown_tx: Some(shutdown_tx),
-            _handle: handle,
+            shutdown_tx: std::sync::Mutex::new(Some(shutdown_tx)),
             port,
         })
+    }
+
+    pub fn shutdown(&self) {
+        if let Some(tx) = self.shutdown_tx.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
     }
 }
 
 impl Drop for ClipboardServer {
     fn drop(&mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
+        self.shutdown();
     }
 }
 
@@ -55,7 +57,6 @@ async fn run_server(
         tokio::select! {
             // Check for shutdown signal
             _ = &mut shutdown_rx => {
-                // Shutdown log is handled in neovim.rs
                 break;
             }
             // Accept new connections
