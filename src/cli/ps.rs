@@ -3,11 +3,12 @@ use miette::{miette, Context, Result};
 use crate::{
     config::Config,
     devcontainer::{ComposeContainerInfo, DevContainer},
+    progress::Logger,
 };
 
 use super::{Args, PsArgs};
 
-pub async fn main(_config: &Config, args: &Args, _ps_args: &PsArgs) -> Result<()> {
+pub async fn main(logger: &Logger, _config: &Config, args: &Args, _ps_args: &PsArgs) -> Result<()> {
     let workspace_folder = args.resolve_workspace_folder()?;
     let config_path = args.resolve_config_path()?;
 
@@ -25,13 +26,13 @@ pub async fn main(_config: &Config, args: &Args, _ps_args: &PsArgs) -> Result<()
         let service_name = dc
             .compose_service_name()?
             .unwrap_or_else(|| "(missing `service` field)".to_string());
-        match dc.list_compose_containers(&project_name).await {
+        match dc.list_compose_containers(logger, &project_name).await {
             Ok(found) => containers = found,
             Err(err) => container_error = Some(err.to_string()),
         }
         (Some(project_name), Some(service_name))
     } else {
-        match dc.list_non_compose_containers().await {
+        match dc.list_non_compose_containers(logger).await {
             Ok(found) => containers = found,
             Err(err) => container_error = Some(err.to_string()),
         }

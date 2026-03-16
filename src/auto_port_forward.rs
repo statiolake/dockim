@@ -4,8 +4,8 @@ use tokio::{sync::oneshot, task::JoinSet, time::sleep};
 
 use crate::{
     devcontainer::DevContainer,
-    log,
     port_forwarder::{PortForwardGuard, PortForwarder},
+    progress::Logger,
 };
 
 /// Watches ports listening inside the container and automatically forwards new ones to the host.
@@ -26,11 +26,12 @@ impl AutoPortForwarder {
         dc: Arc<DevContainer>,
         manager: Arc<PortForwarder>,
         exclude_ports: Vec<u16>,
+        logger: Logger,
         join_set: &mut JoinSet<()>,
     ) -> Self {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-        join_set.spawn(run_auto_forward(dc, manager, shutdown_rx, exclude_ports));
+        join_set.spawn(run_auto_forward(dc, manager, shutdown_rx, exclude_ports, logger));
 
         Self {
             shutdown_tx: std::sync::Mutex::new(Some(shutdown_tx)),
@@ -56,6 +57,7 @@ async fn run_auto_forward(
     manager: Arc<PortForwarder>,
     mut shutdown_rx: oneshot::Receiver<()>,
     exclude_ports: Vec<u16>,
+    logger: Logger,
 ) {
     let mut forwarded: HashMap<u16, (u16, PortForwardGuard)> = HashMap::new();
 
@@ -65,7 +67,7 @@ async fn run_auto_forward(
             _ = sleep(Duration::from_secs(2)) => {}
         }
 
-        let listening = match dc.detect_listening_ports().await {
+        let listening = match dc.detect_listening_ports(&logger).await {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -90,11 +92,11 @@ async fn run_auto_forward(
                 .await
             {
                 Ok(guard) => {
-                    log!("AutoForward": "container port {} -> host port {}", container_port, host_port);
+                    logger.log("AutoForward", &format!("container port {} -> host port {}", container_port, host_port));
                     forwarded.insert(container_port, (host_port, guard));
                 }
                 Err(e) => {
-                    log!("AutoForward": "failed to forward container port {}: {}", container_port, e);
+                    logger.log("AutoForward", &format!("failed to forward container port {}: {}", container_port, e));
                 }
             }
         }
@@ -108,7 +110,7 @@ async fn run_auto_forward(
         for container_port in closed_ports {
             if let Some((host_port, _guard)) = forwarded.remove(&container_port) {
                 // _guard is dropped here, which sends a stop message to the manager
-                log!("AutoForward": "container port {} (host {}) closed, stopping forward", container_port, host_port);
+                logger.log("AutoForward", &format!("container port {} (host {}) closed, stopping forward", container_port, host_port));
             }
         }
     }

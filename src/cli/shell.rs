@@ -8,11 +8,12 @@ use crate::{
     cli::{Args, BuildArgs, ShellArgs},
     config::Config,
     devcontainer::{DevContainer, RootMode},
-    log,
     port_forwarder::PortForwarder,
+    progress::Logger,
 };
 
 pub async fn main(
+    logger: &Logger,
     config: &Config,
     args: &Args,
     shell_args: &ShellArgs,
@@ -27,31 +28,31 @@ pub async fn main(
         .wrap_err("failed to initialize devcontainer client")?,
     );
 
-    dc.up(false, false).await?;
+    dc.up(logger, false, false).await?;
 
     // Check if Neovim is installed, if not, run build first
     if dc
-        .exec_capturing_stdout("Checking", "Neovim version", &["/usr/local/bin/nvim", "--version"], RootMode::No)
+        .exec_capturing_stdout(logger, "Checking", "Neovim version", &["/usr/local/bin/nvim", "--version"], RootMode::No)
         .await
         .is_err()
     {
-        log!("Building": "Neovim not found, running build first");
+        logger.log("Building", "Neovim not found, running build first");
         let build_args = BuildArgs {
             rebuild: false,
             no_cache: false,
             neovim_from_source: false,
             no_async: false,
         };
-        crate::cli::build::main(config, args, &build_args).await?;
+        crate::cli::build::main(logger, config, args, &build_args).await?;
     }
 
-    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), join_set));
+    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger.clone(), join_set));
     let _auto_forwarder =
-        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], join_set);
+        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], logger.clone(), join_set);
 
     let mut cmd_args = vec![&*config.shell];
     cmd_args.extend(shell_args.args.iter().map(|s| s.as_str()));
-    dc.exec("Running", "shell", &cmd_args, RootMode::No).await.wrap_err(miette!(
+    dc.exec(logger, "Running", "shell", &cmd_args, RootMode::No).await.wrap_err(miette!(
         help = "try `dockim build --rebuild` first",
         "failed to execute `{}` on the container",
         config.shell

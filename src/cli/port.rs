@@ -9,9 +9,11 @@ use crate::{
     config::Config,
     devcontainer::DevContainer,
     port_forwarder::PortForwarder,
+    progress::Logger,
 };
 
 pub async fn main(
+    logger: &Logger,
     _config: &Config,
     args: &Args,
     port_args: &PortArgs,
@@ -26,9 +28,9 @@ pub async fn main(
         .wrap_err("failed to initialize devcontainer client")?,
     );
 
-    dc.up(false, false).await?;
+    dc.up(logger, false, false).await?;
 
-    let forwarder = PortForwarder::new(dc, join_set);
+    let forwarder = PortForwarder::new(dc, logger.clone(), join_set);
 
     match &port_args.subcommand {
         PortSubcommand::Add(add_args) => add_port(&forwarder, add_args).await,

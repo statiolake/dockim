@@ -14,10 +14,9 @@ use tokio::task::JoinSet;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    dockim::log::set_verbose(args.verbose);
-    dockim::progress::init(args.verbose);
+    let logger = dockim::progress::init(args.verbose);
 
-    check_requirements().await?;
+    check_requirements(&logger).await?;
     let config = Config::load_config()?;
 
     let mut join_set = JoinSet::new();
@@ -30,27 +29,27 @@ async fn main() -> Result<()> {
         Subcommand::InitDocker(init_docker_args) => {
             init_docker::main(&config, &args, init_docker_args).await
         }
-        Subcommand::Up(up_args) => up::main(&config, &args, up_args).await,
-        Subcommand::Build(build_args) => build::main(&config, &args, build_args).await,
+        Subcommand::Up(up_args) => up::main(&logger, &config, &args, up_args).await,
+        Subcommand::Build(build_args) => build::main(&logger, &config, &args, build_args).await,
         Subcommand::Neovim(neovim_args) => {
-            neovim::main(&config, &args, neovim_args, &mut join_set).await
+            neovim::main(&logger, &config, &args, neovim_args, &mut join_set).await
         }
         Subcommand::Shell(shell_args) => {
-            shell::main(&config, &args, shell_args, &mut join_set).await
+            shell::main(&logger, &config, &args, shell_args, &mut join_set).await
         }
-        Subcommand::Bash(bash_args) => bash::main(&config, &args, bash_args).await,
+        Subcommand::Bash(bash_args) => bash::main(&logger, &config, &args, bash_args).await,
         Subcommand::Exec(exec_args) => {
-            cli_exec::main(&config, &args, exec_args, &mut join_set).await
+            cli_exec::main(&logger, &config, &args, exec_args, &mut join_set).await
         }
         Subcommand::Port(port_args) => {
-            port::main(&config, &args, port_args, &mut join_set).await
+            port::main(&logger, &config, &args, port_args, &mut join_set).await
         }
-        Subcommand::Ps(ps_args) => ps::main(&config, &args, ps_args).await,
+        Subcommand::Ps(ps_args) => ps::main(&logger, &config, &args, ps_args).await,
         Subcommand::Ls(ls_args) => ls::main(&config, &args, ls_args).await,
-        Subcommand::Stop(stop_args) => stop::main(&config, &args, stop_args).await,
-        Subcommand::Down(down_args) => down::main(&config, &args, down_args).await,
+        Subcommand::Stop(stop_args) => stop::main(&logger, &config, &args, stop_args).await,
+        Subcommand::Down(down_args) => down::main(&logger, &config, &args, down_args).await,
         Subcommand::ClipboardServer(clipboard_server_args) => {
-            clipboard_server::main(&config, &args, clipboard_server_args, &mut join_set).await
+            clipboard_server::main(&logger, &config, &args, clipboard_server_args, &mut join_set).await
         }
     };
 
@@ -60,8 +59,8 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn check_requirements() -> Result<()> {
-    if !DevContainer::is_cli_installed().await {
+async fn check_requirements(logger: &dockim::progress::Logger) -> Result<()> {
+    if !DevContainer::is_cli_installed(logger).await {
         bail!(
             help = concat!(
                 "run `npm install -g @devcontainers/cli` to install it\n",
@@ -71,7 +70,7 @@ async fn check_requirements() -> Result<()> {
         );
     }
 
-    if exec::capturing_stdout("Checking", "Docker version", &["docker", "--version"]).await.is_err() {
+    if exec::capturing_stdout(logger, "Checking", "Docker version", &["docker", "--version"]).await.is_err() {
         bail!(
             help = "install or start Docker Desktop first",
             "Docker is not installed or not running",

@@ -1,9 +1,10 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
+    fmt::Debug,
     io::{IsTerminal, Write},
     sync::{
-        atomic::{AtomicU64, Ordering},
-        LazyLock, Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        OnceLock,
     },
 };
 
@@ -16,36 +17,101 @@ const MAX_TAIL_LINES: usize = 5;
 // --- SpanId ---
 
 static NEXT_SPAN_ID: AtomicU64 = AtomicU64::new(1);
+static VERBOSE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpanId(u64);
 
 impl SpanId {
-    pub fn next() -> Self {
+    fn next() -> Self {
         Self(NEXT_SPAN_ID.fetch_add(1, Ordering::Relaxed))
     }
 }
 
-// --- Task-to-Span mapping ---
+// --- Logger ---
 
-static TASK_SPAN_MAP: LazyLock<Mutex<HashMap<tokio::task::Id, SpanId>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// A logger that can be passed around to log exec steps and create sub-spans.
+/// Cheap to clone (just an Option<SpanId> + channel sender).
+#[derive(Clone)]
+pub struct Logger {
+    span_id: Option<SpanId>,
+    handle: ProgressHandle,
+}
 
-pub fn register_task_span(span_id: SpanId) {
-    if let Some(task_id) = tokio::task::try_id() {
-        TASK_SPAN_MAP.lock().unwrap().insert(task_id, span_id);
+impl Logger {
+    /// Create a child span. Returns a new Logger scoped to it.
+    /// The span header is printed immediately.
+    /// When the returned Logger is dropped, the span is closed.
+    pub fn span(&self, verb: &str, desc: &str) -> Logger {
+        let id = SpanId::next();
+        self.handle.send(ProgressEvent::SpanEnter {
+            id,
+            verb: verb.to_string(),
+            desc: desc.to_string(),
+        });
+        Logger {
+            span_id: Some(id),
+            handle: self.handle.clone(),
+        }
+    }
+
+    /// Log a standalone message.
+    pub fn log(&self, verb: &str, desc: &str) {
+        self.handle.send(ProgressEvent::Log {
+            verb: verb.to_string(),
+            desc: desc.to_string(),
+        });
+    }
+
+    /// Log an exec step (called by exec functions).
+    pub fn log_exec<S: AsRef<str> + Debug>(&self, verb: &str, desc: &str, args: &[S]) {
+        self.handle.send(ProgressEvent::Step {
+            span_id: self.span_id,
+            verb: verb.to_string(),
+            desc: desc.to_string(),
+        });
+        if VERBOSE.load(Ordering::Relaxed) {
+            self.handle.send(ProgressEvent::Verbose {
+                span_id: self.span_id,
+                line: format!("{args:?}"),
+            });
+        }
+    }
+
+    /// Send a tail output line.
+    pub fn tail_line(&self, line: String) {
+        self.handle.send(ProgressEvent::TailLine {
+            span_id: self.span_id,
+            line,
+        });
+    }
+
+    /// Mark the current step as done, with optional summary.
+    pub fn step_done(&self, summary: Option<String>) {
+        self.handle.send(ProgressEvent::StepDone {
+            span_id: self.span_id,
+            summary,
+        });
+    }
+
+    /// Mark the current step as failed.
+    pub fn step_failed(&self) {
+        self.handle.send(ProgressEvent::StepFailed {
+            span_id: self.span_id,
+        });
+    }
+
+    pub fn span_id(&self) -> Option<SpanId> {
+        self.span_id
     }
 }
 
-pub fn deregister_task_span() {
-    if let Some(task_id) = tokio::task::try_id() {
-        TASK_SPAN_MAP.lock().unwrap().remove(&task_id);
+impl Drop for Logger {
+    fn drop(&mut self) {
+        if let Some(id) = self.span_id {
+            self.handle.send(ProgressEvent::SpanExit { id });
+        }
     }
-}
-
-pub fn current_span_id() -> Option<SpanId> {
-    let task_id = tokio::task::try_id()?;
-    TASK_SPAN_MAP.lock().unwrap().get(&task_id).copied()
 }
 
 // --- Events ---
@@ -98,16 +164,26 @@ pub enum ProgressEvent {
 
 static PROGRESS_HANDLE: OnceLock<ProgressHandle> = OnceLock::new();
 
-pub fn init(verbose: bool) {
+/// Initialize the progress system and return a root Logger.
+pub fn init(verbose: bool) -> Logger {
+    VERBOSE.store(verbose, Ordering::Relaxed);
     let handle = ProgressRenderer::start(verbose);
-    PROGRESS_HANDLE.set(handle).ok();
+    let _ = PROGRESS_HANDLE.set(handle.clone());
+    Logger {
+        span_id: None,
+        handle,
+    }
 }
 
-pub fn handle() -> &'static ProgressHandle {
-    PROGRESS_HANDLE.get_or_init(|| {
-        // Lazy init for test environments where init() wasn't called
-        ProgressRenderer::start(false)
-    })
+/// Get a root logger (for test environments or late initialization).
+pub fn root_logger() -> Logger {
+    let handle = PROGRESS_HANDLE
+        .get_or_init(|| ProgressRenderer::start(false))
+        .clone();
+    Logger {
+        span_id: None,
+        handle,
+    }
 }
 
 // --- ProgressHandle ---

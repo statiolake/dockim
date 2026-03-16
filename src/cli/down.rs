@@ -4,14 +4,15 @@ use crate::{
     cli::{Args, DownArgs},
     config::Config,
     devcontainer::DevContainer,
+    progress::Logger,
 };
 
-pub async fn main(_config: &Config, args: &Args, _down_args: &DownArgs) -> Result<()> {
+pub async fn main(logger: &Logger, _config: &Config, args: &Args, _down_args: &DownArgs) -> Result<()> {
     let dc = DevContainer::new(
         args.resolve_workspace_folder()?,
         args.resolve_config_path()?,
     )
     .await
     .wrap_err("failed to initialize devcontainer client")?;
-    dc.down().await
+    dc.down(logger).await
 }

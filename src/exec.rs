@@ -7,16 +7,17 @@ use tokio::{
 
 use miette::{ensure, IntoDiagnostic, Result, WrapErr};
 
-use crate::progress::{self, ProgressEvent};
+use crate::progress::Logger;
 
 pub async fn spawn<S: AsRef<str> + Debug>(
+    logger: &Logger,
     verb: &str,
     desc: &str,
     args: &[S],
 ) -> Result<Child> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
-    crate::log::log_exec(verb, desc, args);
+    logger.log_exec(verb, desc, args);
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -34,13 +35,14 @@ pub async fn spawn<S: AsRef<str> + Debug>(
 }
 
 pub async fn exec<S: AsRef<str> + Debug>(
+    logger: &Logger,
     verb: &str,
     desc: &str,
     args: &[S],
 ) -> Result<()> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
-    crate::log::log_exec(verb, desc, args);
+    logger.log_exec(verb, desc, args);
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -52,11 +54,10 @@ pub async fn exec<S: AsRef<str> + Debug>(
         .into_diagnostic()
         .wrap_err("exec failed")?;
 
-    let span_id = progress::current_span_id();
     if status.success() {
-        progress::handle().send(ProgressEvent::StepDone { span_id, summary: None });
+        logger.step_done(None);
     } else {
-        progress::handle().send(ProgressEvent::StepFailed { span_id });
+        logger.step_failed();
     }
 
     ensure!(status.success(), "Command returned non-successful status",);
@@ -65,6 +66,7 @@ pub async fn exec<S: AsRef<str> + Debug>(
 }
 
 pub async fn with_stdin<S: AsRef<str> + Debug>(
+    logger: &Logger,
     verb: &str,
     desc: &str,
     args: &[S],
@@ -72,7 +74,7 @@ pub async fn with_stdin<S: AsRef<str> + Debug>(
 ) -> Result<()> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
-    crate::log::log_exec(verb, desc, args);
+    logger.log_exec(verb, desc, args);
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -85,11 +87,10 @@ pub async fn with_stdin<S: AsRef<str> + Debug>(
         .into_diagnostic()
         .wrap_err("exec failed")?;
 
-    let span_id = progress::current_span_id();
     if status.success() {
-        progress::handle().send(ProgressEvent::StepDone { span_id, summary: None });
+        logger.step_done(None);
     } else {
-        progress::handle().send(ProgressEvent::StepFailed { span_id });
+        logger.step_failed();
     }
 
     ensure!(status.success(), "Command returned non-successful status");
@@ -98,6 +99,7 @@ pub async fn with_stdin<S: AsRef<str> + Debug>(
 }
 
 pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(
+    logger: &Logger,
     verb: &str,
     desc: &str,
     args: &[S],
@@ -105,7 +107,7 @@ pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(
 ) -> Result<()> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
-    crate::log::log_exec(verb, desc, args);
+    logger.log_exec(verb, desc, args);
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -129,11 +131,10 @@ pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(
         .into_diagnostic()
         .wrap_err("failed to wait child process to finish")?;
 
-    let span_id = progress::current_span_id();
     if status.success() {
-        progress::handle().send(ProgressEvent::StepDone { span_id, summary: None });
+        logger.step_done(None);
     } else {
-        progress::handle().send(ProgressEvent::StepFailed { span_id });
+        logger.step_failed();
     }
 
     ensure!(status.success(), "Command returned non-successful status");
@@ -142,13 +143,14 @@ pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(
 }
 
 pub async fn capturing_stdout<S: AsRef<str> + Debug>(
+    logger: &Logger,
     verb: &str,
     desc: &str,
     args: &[S],
 ) -> Result<String> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
-    crate::log::log_exec(verb, desc, args);
+    logger.log_exec(verb, desc, args);
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -162,15 +164,15 @@ pub async fn capturing_stdout<S: AsRef<str> + Debug>(
 
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
 
-    let span_id = progress::current_span_id();
     if out.status.success() {
-        // Use first line of stdout as summary (e.g. version string)
-        let summary = stdout.lines().next()
+        let summary = stdout
+            .lines()
+            .next()
             .map(|l| l.trim().to_string())
             .filter(|s| !s.is_empty());
-        progress::handle().send(ProgressEvent::StepDone { span_id, summary });
+        logger.step_done(summary);
     } else {
-        progress::handle().send(ProgressEvent::StepFailed { span_id });
+        logger.step_failed();
     }
 
     ensure!(
@@ -188,6 +190,7 @@ pub struct ExecOutput {
 }
 
 pub async fn capturing<S: AsRef<str> + Debug>(
+    logger: &Logger,
     verb: &str,
     desc: &str,
     args: &[S],
@@ -199,7 +202,7 @@ pub async fn capturing<S: AsRef<str> + Debug>(
         });
     }
 
-    crate::log::log_exec(verb, desc, args);
+    logger.log_exec(verb, desc, args);
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -221,11 +224,10 @@ pub async fn capturing<S: AsRef<str> + Debug>(
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
 
-    let span_id = progress::current_span_id();
     if out.status.success() {
-        progress::handle().send(ProgressEvent::StepDone { span_id, summary: None });
+        logger.step_done(None);
     } else {
-        progress::handle().send(ProgressEvent::StepFailed { span_id });
+        logger.step_failed();
     }
 
     let output = ExecOutput { stdout, stderr };
@@ -238,19 +240,15 @@ pub async fn capturing<S: AsRef<str> + Debug>(
 }
 
 /// Execute a command with live tail display of stdout/stderr.
-/// Shows the last N lines of output in dim text while running.
-/// On success, clears the tail. On failure, dumps all output in red.
 pub async fn exec_with_tail<S: AsRef<str> + Debug>(
+    logger: &Logger,
     verb: &str,
     desc: &str,
     args: &[S],
 ) -> Result<()> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
-    crate::log::log_exec(verb, desc, args);
-
-    let span_id = progress::current_span_id();
-    let handle = progress::handle();
+    logger.log_exec(verb, desc, args);
 
     let command = args[0].as_ref();
     let cmd_args = &args[1..];
@@ -274,18 +272,10 @@ pub async fn exec_with_tail<S: AsRef<str> + Debug>(
         tokio::select! {
             line = stdout_reader.next_line() => {
                 match line.into_diagnostic()? {
-                    Some(line) => {
-                        handle.send(ProgressEvent::TailLine {
-                            span_id,
-                            line,
-                        });
-                    }
+                    Some(line) => logger.tail_line(line),
                     None => {
                         while let Some(line) = stderr_reader.next_line().await.into_diagnostic()? {
-                            handle.send(ProgressEvent::TailLine {
-                                span_id,
-                                line,
-                            });
+                            logger.tail_line(line);
                         }
                         break;
                     }
@@ -293,18 +283,10 @@ pub async fn exec_with_tail<S: AsRef<str> + Debug>(
             }
             line = stderr_reader.next_line() => {
                 match line.into_diagnostic()? {
-                    Some(line) => {
-                        handle.send(ProgressEvent::TailLine {
-                            span_id,
-                            line,
-                        });
-                    }
+                    Some(line) => logger.tail_line(line),
                     None => {
                         while let Some(line) = stdout_reader.next_line().await.into_diagnostic()? {
-                            handle.send(ProgressEvent::TailLine {
-                                span_id,
-                                line,
-                            });
+                            logger.tail_line(line);
                         }
                         break;
                     }
@@ -316,10 +298,10 @@ pub async fn exec_with_tail<S: AsRef<str> + Debug>(
     let status = child.wait().await.into_diagnostic()?;
 
     if status.success() {
-        handle.send(ProgressEvent::StepDone { span_id, summary: None });
+        logger.step_done(None);
         Ok(())
     } else {
-        handle.send(ProgressEvent::StepFailed { span_id });
+        logger.step_failed();
         miette::bail!("Command returned non-successful status");
     }
 }

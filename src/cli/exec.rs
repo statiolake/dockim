@@ -9,9 +9,11 @@ use crate::{
     config::Config,
     devcontainer::{DevContainer, RootMode},
     port_forwarder::PortForwarder,
+    progress::Logger,
 };
 
 pub async fn main(
+    logger: &Logger,
     _config: &Config,
     args: &Args,
     exec_args: &ExecArgs,
@@ -26,13 +28,13 @@ pub async fn main(
         .wrap_err("failed to initialize devcontainer client")?,
     );
 
-    dc.up(false, false).await?;
+    dc.up(logger, false, false).await?;
 
-    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), join_set));
+    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger.clone(), join_set));
     let _auto_forwarder =
-        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], join_set);
+        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], logger.clone(), join_set);
 
-    dc.exec("Running", "command in container", &exec_args.args, RootMode::No)
+    dc.exec(logger, "Running", "command in container", &exec_args.args, RootMode::No)
         .await
         .wrap_err(miette!(
             help = "try `dockim build --rebuild` first",

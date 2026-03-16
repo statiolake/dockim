@@ -7,6 +7,7 @@ use tokio::{sync::mpsc, task::JoinSet};
 use crate::{
     devcontainer::{DevContainer, ForwardedPort},
     exec,
+    progress::Logger,
 };
 
 /// Centralized port-forwarding manager.
@@ -16,19 +17,22 @@ use crate::{
 /// `join_set.join_all().await` to wait for all `docker stop` commands to complete.
 pub struct PortForwarder {
     dc: Arc<DevContainer>,
+    logger: Logger,
     stop_tx: std::sync::Mutex<Option<mpsc::UnboundedSender<String>>>,
 }
 
 impl PortForwarder {
-    pub fn new(dc: Arc<DevContainer>, join_set: &mut JoinSet<()>) -> Self {
+    pub fn new(dc: Arc<DevContainer>, logger: Logger, join_set: &mut JoinSet<()>) -> Self {
         let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<String>();
+        let bg_logger = logger.clone();
         join_set.spawn(async move {
             while let Some(container_name) = stop_rx.recv().await {
-                let _ = exec::exec("Stopping", "port-forward container", &["docker", "stop", &container_name]).await;
+                let _ = exec::exec(&bg_logger, "Stopping", "port-forward container", &["docker", "stop", &container_name]).await;
             }
         });
         Self {
             dc,
+            logger,
             stop_tx: std::sync::Mutex::new(Some(stop_tx)),
         }
     }
@@ -48,7 +52,7 @@ impl PortForwarder {
             .wrap_err("failed to determine port-forwarding container name")?;
         let up_output = self
             .dc
-            .inspect()
+            .inspect(&self.logger)
             .await
             .wrap_err("failed to get devcontainer status")?;
 
@@ -58,7 +62,7 @@ impl PortForwarder {
             ip_address: String,
         }
 
-        let network_output = exec::capturing_stdout("Inspecting", "container network settings", &[
+        let network_output = exec::capturing_stdout(&self.logger, "Inspecting", "container network settings", &[
             "docker",
             "inspect",
             "--format",
@@ -82,7 +86,7 @@ impl PortForwarder {
             container_network.ip_address, container_port
         );
 
-        exec::exec("Launching", "port-forward container", &[
+        exec::exec(&self.logger, "Launching", "port-forward container", &[
             "docker",
             "run",
             "-d",
@@ -108,7 +112,7 @@ impl PortForwarder {
             .socat_container_name(host_port)
             .await
             .wrap_err("failed to determine port-forwarding container name")?;
-        exec::exec("Stopping", "port-forward container", &["docker", "stop", &socat_container_name]).await
+        exec::exec(&self.logger, "Stopping", "port-forward container", &["docker", "stop", &socat_container_name]).await
     }
 
     pub async fn list_forwarded_ports(&self) -> Result<Vec<ForwardedPort>> {
@@ -118,7 +122,7 @@ impl PortForwarder {
             .wrap_err("failed to determine port-forwarding container name")?;
 
         let name_filter = format!("name={socat_container_name_prefix}");
-        let port_forward_containers = exec::capturing_stdout("Listing", "port-forward containers", &[
+        let port_forward_containers = exec::capturing_stdout(&self.logger, "Listing", "port-forward containers", &[
             "docker",
             "ps",
             "--filter",
@@ -192,7 +196,7 @@ impl PortForwarder {
     async fn socat_container_name(&self, host_port: &str) -> Result<String> {
         let up_output = self
             .dc
-            .inspect()
+            .inspect(&self.logger)
             .await
             .wrap_err("failed to get devcontainer status")?;
 

@@ -3,10 +3,11 @@ use tokio::{signal, task};
 
 use crate::{
     cli::Args, cli::ClipboardServerArgs, clipboard::ClipboardServer, config::Config,
-    devcontainer::DevContainer, log,
+    devcontainer::DevContainer, progress::Logger,
 };
 
 pub async fn main(
+    logger: &Logger,
     _config: &Config,
     args: &Args,
     _clipboard_server_args: &ClipboardServerArgs,
@@ -21,13 +22,13 @@ pub async fn main(
     let clipboard_port = dc.find_available_host_port().await?;
     let _server = ClipboardServer::start(clipboard_port, join_set).await?;
 
-    log!("Started": "clipboard server on port {}", clipboard_port);
+    logger.log("Started", &format!("clipboard server on port {}", clipboard_port));
     println!("Press Ctrl+C to stop");
 
     signal::ctrl_c().await.into_diagnostic()?;
 
-    log!("Stopping": "clipboard server");
-    // _server is dropped here → shutdown signal sent.
+    logger.log("Stopping", "clipboard server");
+    // _server is dropped here -> shutdown signal sent.
     // Caller's join_set.join_all() waits for the task to complete.
     Ok(())
 }
