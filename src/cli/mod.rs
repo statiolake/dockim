@@ -41,6 +41,9 @@ pub struct Args {
         help = "Dev container configuration name or path. If contains '/', treated as full path to devcontainer.json. Otherwise, treated as config name: .devcontainer/<config>/devcontainer.json"
     )]
     pub config: Option<String>,
+
+    #[clap(short = 'v', long, global = true, help = "Show verbose command output")]
+    pub verbose: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,6 +363,7 @@ mod tests {
             subcommand: Subcommand::Ls(super::LsArgs {}),
             workspace_folder: Some(workspace.to_path_buf()),
             config: None,
+            verbose: false,
         };
         let discovered = args.discover_devcontainer_configs().unwrap();
 
@@ -390,6 +394,7 @@ mod tests {
             subcommand: Subcommand::Ls(super::LsArgs {}),
             workspace_folder: Some(workspace.to_path_buf()),
             config: Some("api".to_string()),
+            verbose: false,
         };
 
         let resolved = args.resolve_config_path().unwrap();

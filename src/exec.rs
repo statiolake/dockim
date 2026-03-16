@@ -1,18 +1,25 @@
 use std::{fmt::Debug, process::Stdio};
 
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
 };
 
 use miette::{ensure, IntoDiagnostic, Result, WrapErr};
 
-use crate::log;
+use crate::tail_display::TailDisplay;
 
-pub async fn spawn<S: AsRef<str> + Debug>(args: &[S]) -> Result<Child> {
+pub async fn spawn<S: AsRef<str> + Debug>(
+    verb: &str,
+    desc: &str,
+    args: &[S],
+) -> Result<Child> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
-    log!("Spawning": "{args:?}");
+    {
+        let _guard = crate::log::LOG_MUTEX.lock().await;
+        crate::log::log_exec(verb, desc, args);
+    }
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -29,10 +36,17 @@ pub async fn spawn<S: AsRef<str> + Debug>(args: &[S]) -> Result<Child> {
     Ok(child)
 }
 
-pub async fn exec<S: AsRef<str> + Debug>(args: &[S]) -> Result<()> {
+pub async fn exec<S: AsRef<str> + Debug>(
+    verb: &str,
+    desc: &str,
+    args: &[S],
+) -> Result<()> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
-    log!("Running": "{args:?}");
+    {
+        let _guard = crate::log::LOG_MUTEX.lock().await;
+        crate::log::log_exec(verb, desc, args);
+    }
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -48,10 +62,18 @@ pub async fn exec<S: AsRef<str> + Debug>(args: &[S]) -> Result<()> {
     reset_terminal().await
 }
 
-pub async fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Result<()> {
+pub async fn with_stdin<S: AsRef<str> + Debug>(
+    verb: &str,
+    desc: &str,
+    args: &[S],
+    stdin: Stdio,
+) -> Result<()> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
-    log!("Running" ("with stdin"): "{args:?}");
+    {
+        let _guard = crate::log::LOG_MUTEX.lock().await;
+        crate::log::log_exec(verb, desc, args);
+    }
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -68,10 +90,18 @@ pub async fn with_stdin<S: AsRef<str> + Debug>(args: &[S], stdin: Stdio) -> Resu
     Ok(())
 }
 
-pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -> Result<()> {
+pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(
+    verb: &str,
+    desc: &str,
+    args: &[S],
+    bytes: &[u8],
+) -> Result<()> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
-    log!("Running" ("with stdin"): "{args:?}");
+    {
+        let _guard = crate::log::LOG_MUTEX.lock().await;
+        crate::log::log_exec(verb, desc, args);
+    }
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -99,10 +129,17 @@ pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(args: &[S], bytes: &[u8]) -
     Ok(())
 }
 
-pub async fn capturing_stdout<S: AsRef<str> + Debug>(args: &[S]) -> Result<String> {
+pub async fn capturing_stdout<S: AsRef<str> + Debug>(
+    verb: &str,
+    desc: &str,
+    args: &[S],
+) -> Result<String> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
-    log!("Running" ("with capture"): "{args:?}");
+    {
+        let _guard = crate::log::LOG_MUTEX.lock().await;
+        crate::log::log_exec(verb, desc, args);
+    }
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -129,7 +166,11 @@ pub struct ExecOutput {
     pub stderr: String,
 }
 
-pub async fn capturing<S: AsRef<str> + Debug>(args: &[S]) -> Result<ExecOutput, ExecOutput> {
+pub async fn capturing<S: AsRef<str> + Debug>(
+    verb: &str,
+    desc: &str,
+    args: &[S],
+) -> Result<ExecOutput, ExecOutput> {
     if args.is_empty() {
         return Err(ExecOutput {
             stdout: String::new(),
@@ -137,7 +178,10 @@ pub async fn capturing<S: AsRef<str> + Debug>(args: &[S]) -> Result<ExecOutput, 
         });
     }
 
-    log!("Running" ("with capture stdout/stderr"): "{args:?}");
+    {
+        let _guard = crate::log::LOG_MUTEX.lock().await;
+        crate::log::log_exec(verb, desc, args);
+    }
 
     let command = args[0].as_ref();
     let args = &args[1..];
@@ -165,6 +209,82 @@ pub async fn capturing<S: AsRef<str> + Debug>(args: &[S]) -> Result<ExecOutput, 
         Ok(output)
     } else {
         Err(output)
+    }
+}
+
+/// Execute a command with live tail display of stdout/stderr.
+/// Shows the last N lines of output in dim text while running.
+/// On success, clears the tail. On failure, dumps all output in red.
+pub async fn exec_with_tail<S: AsRef<str> + Debug>(
+    verb: &str,
+    desc: &str,
+    args: &[S],
+) -> Result<()> {
+    ensure!(!args.is_empty(), "No command provided to exec");
+
+    {
+        let _guard = crate::log::LOG_MUTEX.lock().await;
+        crate::log::log_exec(verb, desc, args);
+    }
+
+    let command = args[0].as_ref();
+    let cmd_args = &args[1..];
+
+    let mut child = Command::new(command)
+        .args(cmd_args.iter().map(|s| s.as_ref()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .into_diagnostic()
+        .wrap_err("exec failed")?;
+
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
+    let mut stdout_reader = BufReader::new(stdout).lines();
+    let mut stderr_reader = BufReader::new(stderr).lines();
+
+    let mut display = TailDisplay::new();
+
+    loop {
+        tokio::select! {
+            line = stdout_reader.next_line() => {
+                match line.into_diagnostic()? {
+                    Some(line) => display.push_line(&line),
+                    None => {
+                        // stdout closed, drain stderr
+                        while let Some(line) = stderr_reader.next_line().await.into_diagnostic()? {
+                            display.push_line(&line);
+                        }
+                        break;
+                    }
+                }
+            }
+            line = stderr_reader.next_line() => {
+                match line.into_diagnostic()? {
+                    Some(line) => display.push_line(&line),
+                    None => {
+                        // stderr closed, drain stdout
+                        while let Some(line) = stdout_reader.next_line().await.into_diagnostic()? {
+                            display.push_line(&line);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let status = child.wait().await.into_diagnostic()?;
+
+    if status.success() {
+        display.clear();
+        Ok(())
+    } else {
+        display.clear();
+        display.dump_all_red();
+        miette::bail!("Command returned non-successful status");
     }
 }
 

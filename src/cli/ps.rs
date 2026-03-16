@@ -73,25 +73,28 @@ pub async fn main(_config: &Config, args: &Args, _ps_args: &PsArgs) -> Result<()
 }
 
 fn print_containers_table(containers: &[ComposeContainerInfo]) {
-    println!(
-        "  {:<12}  {:<32}  {:<16}  {:<24}  {}",
-        "ID", "NAME", "SERVICE", "STATUS", "IMAGE"
-    );
+    use tabled::{builder::Builder, settings::Style};
+
+    let mut builder = Builder::new();
+    builder.push_record(["ID", "NAME", "SERVICE", "STATUS", "IMAGE"]);
     for container in containers {
         let short_id = if container.id.len() > 12 {
             &container.id[..12]
         } else {
             &container.id
         };
-
-        println!(
-            "  {:<12}  {:<32}  {:<16}  {:<24}  {}",
+        builder.push_record([
             short_id,
-            container.name,
+            &container.name,
             container.service.as_deref().unwrap_or("-"),
-            container.status,
-            container.image
-        );
+            &container.status,
+            &container.image,
+        ]);
+    }
+
+    let table = builder.build().with(Style::modern()).to_string();
+    for line in table.lines() {
+        println!("  {line}");
     }
 }
 

@@ -67,10 +67,18 @@ async fn list_ports(forwarder: &PortForwarder) -> Result<()> {
     if ports.is_empty() {
         println!("No port forwards active");
     } else {
+        use tabled::{builder::Builder, settings::Style};
+
         println!("Active port forwards:");
-        println!("HOST:CONTAINER");
-        for port in ports {
-            println!("{}:{}", port.host_port, port.container_port);
+        let mut builder = Builder::new();
+        builder.push_record(["Host Port", "Container Port"]);
+        for port in &ports {
+            builder.push_record([&port.host_port, &port.container_port]);
+        }
+
+        let table = builder.build().with(Style::modern()).to_string();
+        for line in table.lines() {
+            println!("  {line}");
         }
     }
 

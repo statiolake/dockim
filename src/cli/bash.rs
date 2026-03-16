@@ -17,7 +17,7 @@ pub async fn main(_config: &Config, args: &Args, shell_args: &BashArgs) -> Resul
 
     let mut args = vec!["bash"];
     args.extend(shell_args.args.iter().map(|s| s.as_str()));
-    dc.exec(&args, RootMode::No).await.wrap_err_with(|| {
+    dc.exec("Running", "bash", &args, RootMode::No).await.wrap_err_with(|| {
         miette!(
             help = "try `dockim build --rebuild` first",
             "failed to execute `bash` on the container",

@@ -17,18 +17,23 @@ pub async fn main(_config: &Config, args: &Args, _ls_args: &LsArgs) -> Result<()
         return Ok(());
     }
 
-    println!("  {:<20}  {}", "Config Name", "Path");
-    println!(
-        "  {:<20}  {}",
-        std::iter::repeat("-").take(9).collect::<String>(),
-        std::iter::repeat("-").take(4).collect::<String>()
-    );
-    for config in &configs {
-        let config_path = config
-            .path
-            .strip_prefix(&workspace_folder)
-            .unwrap_or(&config.path);
-        println!("  {:<20}  {}", config.name, config_path.display());
+    {
+        use tabled::{builder::Builder, settings::Style};
+
+        let mut builder = Builder::new();
+        builder.push_record(["Config Name", "Path"]);
+        for config in &configs {
+            let config_path = config
+                .path
+                .strip_prefix(&workspace_folder)
+                .unwrap_or(&config.path);
+            builder.push_record([config.name.as_str(), &config_path.display().to_string()]);
+        }
+
+        let table = builder.build().with(Style::modern()).to_string();
+        for line in table.lines() {
+            println!("  {line}");
+        }
     }
 
     Ok(())

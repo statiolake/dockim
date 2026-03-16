@@ -32,7 +32,7 @@ pub async fn main(
     let _auto_forwarder =
         AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], join_set);
 
-    dc.exec(&exec_args.args, RootMode::No)
+    dc.exec("Running", "command in container", &exec_args.args, RootMode::No)
         .await
         .wrap_err(miette!(
             help = "try `dockim build --rebuild` first",

@@ -24,7 +24,7 @@ impl PortForwarder {
         let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<String>();
         join_set.spawn(async move {
             while let Some(container_name) = stop_rx.recv().await {
-                let _ = exec::exec(&["docker", "stop", &container_name]).await;
+                let _ = exec::exec("Stopping", "port-forward container", &["docker", "stop", &container_name]).await;
             }
         });
         Self {
@@ -58,7 +58,7 @@ impl PortForwarder {
             ip_address: String,
         }
 
-        let network_output = exec::capturing_stdout(&[
+        let network_output = exec::capturing_stdout("Inspecting", "container network settings", &[
             "docker",
             "inspect",
             "--format",
@@ -82,7 +82,7 @@ impl PortForwarder {
             container_network.ip_address, container_port
         );
 
-        exec::exec(&[
+        exec::exec("Launching", "port-forward container", &[
             "docker",
             "run",
             "-d",
@@ -108,7 +108,7 @@ impl PortForwarder {
             .socat_container_name(host_port)
             .await
             .wrap_err("failed to determine port-forwarding container name")?;
-        exec::exec(&["docker", "stop", &socat_container_name]).await
+        exec::exec("Stopping", "port-forward container", &["docker", "stop", &socat_container_name]).await
     }
 
     pub async fn list_forwarded_ports(&self) -> Result<Vec<ForwardedPort>> {
@@ -118,7 +118,7 @@ impl PortForwarder {
             .wrap_err("failed to determine port-forwarding container name")?;
 
         let name_filter = format!("name={socat_container_name_prefix}");
-        let port_forward_containers = exec::capturing_stdout(&[
+        let port_forward_containers = exec::capturing_stdout("Listing", "port-forward containers", &[
             "docker",
             "ps",
             "--filter",

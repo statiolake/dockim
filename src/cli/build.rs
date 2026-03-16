@@ -8,11 +8,13 @@ use crate::{
     cli::{Args, BuildArgs},
     config::Config,
     devcontainer::{ContainerFileDestination, DevContainer, RootMode},
-    exec, log,
+    exec,
+    log::LogSpan,
+    verbose_log,
 };
 
 pub async fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> {
-    log!("Building": "in async mode: {}", if build_args.no_async { "no" } else { "yes" });
+    verbose_log!("Building": "in async mode: {}", if build_args.no_async { "no" } else { "yes" });
     let config = Arc::new(config.clone());
     let dc = Arc::new(
         DevContainer::new(
@@ -49,28 +51,44 @@ pub async fn main(config: &Config, args: &Args, build_args: &BuildArgs) -> Resul
             let config = Arc::clone(&config);
             let dc = Arc::clone(&dc);
             let neovim_from_source = build_args.neovim_from_source;
-            async move { install_neovim(&config, &dc, neovim_from_source).await }
+            async move {
+                let _span = LogSpan::enter("Installing", "Neovim");
+                install_neovim(&config, &dc, neovim_from_source).await
+            }
         },
         {
             let dc = Arc::clone(&dc);
-            async move { setup_github_cli(&dc).await }
+            async move {
+                let _span = LogSpan::enter("Setting up", "GitHub CLI");
+                setup_github_cli(&dc).await
+            }
         },
         {
             let dc = Arc::clone(&dc);
-            async move { copy_copilot(&dc).await }
+            async move {
+                let _span = LogSpan::enter("Copying", "Copilot credentials");
+                copy_copilot(&dc).await
+            }
         },
         {
             let dc = Arc::clone(&dc);
-            async move { prepare_opt_dir(&dc, &up_cont.remote_user).await }
+            async move {
+                let _span = LogSpan::enter("Preparing", "/opt directory");
+                prepare_opt_dir(&dc, &up_cont.remote_user).await
+            }
         },
     }
 
-    install_dotfiles(&config, &dc).await?;
+    {
+        let _span = LogSpan::enter("Deploying", "dotfiles");
+        install_dotfiles(&config, &dc).await?;
+    }
 
     Ok(())
 }
 
 async fn install_prerequisites(dc: &DevContainer, _neovim_from_source: bool) -> Result<()> {
+    let _span = LogSpan::enter("Installing", "prerequisites (zsh, tmux, curl, fzf, ...)");
     let prerequisites = [
         "zsh",
         "tmux",
@@ -86,7 +104,8 @@ async fn install_prerequisites(dc: &DevContainer, _neovim_from_source: bool) -> 
     ];
 
     // Sometimes apt-get update fails without 777 permissions on /tmp
-    dc.exec(
+    dc.exec_tailed(
+        "Running", "apt-get update && install",
         &[
             "sh",
             "-c",
@@ -113,7 +132,7 @@ async fn install_neovim(
     neovim_from_source: bool,
 ) -> Result<()> {
     if dc
-        .exec_capturing_stdout(&["/usr/local/bin/nvim", "--version"], RootMode::No)
+        .exec_capturing_stdout("Checking", "Neovim version", &["/usr/local/bin/nvim", "--version"], RootMode::No)
         .await
         .is_ok()
     {
@@ -129,7 +148,7 @@ async fn install_neovim(
 
     // Test if the binary actually works
     let Err(output) = dc
-        .exec_capturing(&["/usr/local/bin/nvim", "--version"], RootMode::No)
+        .exec_capturing("Checking", "Neovim binary", &["/usr/local/bin/nvim", "--version"], RootMode::No)
         .await
     else {
         return Ok(()); // Binary works fine
@@ -149,7 +168,7 @@ async fn install_neovim(
 
 async fn install_neovim_from_binary(config: &Config, dc: &DevContainer) -> Result<()> {
     let arch = dc
-        .exec_capturing_stdout(&["uname", "-m"], RootMode::No)
+        .exec_capturing_stdout("Querying", "system architecture", &["uname", "-m"], RootMode::No)
         .await
         .wrap_err("failed to determine system architecture")?
         .trim()
@@ -165,7 +184,8 @@ async fn install_neovim_from_binary(config: &Config, dc: &DevContainer) -> Resul
         config.neovim_binary_repository, config.neovim_version, arch
     );
 
-    dc.exec(
+    dc.exec_tailed(
+        "Installing", "Neovim from binary",
         &[
             "sh",
             "-c",
@@ -204,7 +224,8 @@ async fn install_neovim_from_source(config: &Config, dc: &DevContainer) -> Resul
         "unzip",
     ];
 
-    dc.exec(
+    dc.exec_tailed(
+        "Installing", "Neovim source build dependencies",
         &[
             "sh",
             "-c",
@@ -232,17 +253,18 @@ async fn install_neovim_from_source(config: &Config, dc: &DevContainer) -> Resul
         neovim_version = neovim_version
     );
 
-    dc.exec(&["sh", "-c", &build_cmd], RootMode::No).await?;
+    dc.exec_tailed("Building", "Neovim from source", &["sh", "-c", &build_cmd], RootMode::No).await?;
 
     // Install as root
-    dc.exec(
+    dc.exec_tailed(
+        "Installing", "Neovim build artifacts",
         &["sh", "-c", "cd /tmp/neovim && make install"],
         RootMode::Yes,
     )
     .await?;
 
     // Cleanup
-    dc.exec(&["rm", "-rf", "/tmp/neovim"], RootMode::No).await?;
+    dc.exec_tailed("Cleaning", "Neovim build directory", &["rm", "-rf", "/tmp/neovim"], RootMode::No).await?;
 
     Ok(())
 }
@@ -259,7 +281,7 @@ async fn setup_github_cli(dc: &DevContainer) -> Result<()> {
     async fn install(dc: &DevContainer) -> Result<()> {
         // Check if gh is already installed
         if dc
-            .exec_capturing_stdout(&["~/.local/bin/gh", "--version"], RootMode::No)
+            .exec_capturing_stdout("Checking", "GitHub CLI version", &["~/.local/bin/gh", "--version"], RootMode::No)
             .await
             .is_ok()
         {
@@ -267,7 +289,7 @@ async fn setup_github_cli(dc: &DevContainer) -> Result<()> {
         }
 
         let arch = dc
-            .exec_capturing_stdout(&["uname", "-m"], RootMode::No)
+            .exec_capturing_stdout("Querying", "system architecture", &["uname", "-m"], RootMode::No)
             .await
             .wrap_err("failed to determine system architecture")?
             .trim()
@@ -279,7 +301,7 @@ async fn setup_github_cli(dc: &DevContainer) -> Result<()> {
         };
 
         // Get the latest release version from GitHub API on host machine
-        let api_response = exec::capturing_stdout(&[
+        let api_response = exec::capturing_stdout("Querying", "latest GitHub CLI release", &[
             "curl",
             "-s",
             "https://api.github.com/repos/cli/cli/releases/latest",
@@ -303,7 +325,8 @@ async fn setup_github_cli(dc: &DevContainer) -> Result<()> {
             arch
         );
 
-        dc.exec(
+        dc.exec_tailed(
+            "Installing", "GitHub CLI",
             &[
                 "sh",
                 "-c",
@@ -328,8 +351,9 @@ async fn setup_github_cli(dc: &DevContainer) -> Result<()> {
     }
 
     async fn login(dc: &DevContainer) -> Result<()> {
-        let token = exec::capturing_stdout(&["gh", "auth", "token"]).await?;
+        let token = exec::capturing_stdout("Querying", "GitHub auth token", &["gh", "auth", "token"]).await?;
         dc.exec_with_bytes_stdin(
+            "Logging in", "to GitHub CLI",
             &["sh", "-c", "~/.local/bin/gh auth login --with-token"],
             token.trim().as_bytes(),
             RootMode::No,
@@ -366,7 +390,8 @@ async fn copy_copilot(dc: &DevContainer) -> Result<()> {
 }
 
 async fn prepare_opt_dir(dc: &DevContainer, owner_user: &str) -> Result<()> {
-    dc.exec(
+    dc.exec_tailed(
+        "Preparing", "/opt directory",
         &[
             "sh",
             "-c",
@@ -386,7 +411,8 @@ async fn prepare_opt_dir(dc: &DevContainer, owner_user: &str) -> Result<()> {
 }
 
 async fn install_dotfiles(config: &Config, dc: &DevContainer) -> Result<()> {
-    dc.exec(
+    dc.exec_tailed(
+        "Deploying", "dotfiles",
         &[
             "sh",
             "-c",

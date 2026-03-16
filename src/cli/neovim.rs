@@ -44,7 +44,7 @@ pub async fn main(
 
     // Check if Neovim is installed, if not, run build first
     if dc
-        .exec_capturing_stdout(&["/usr/local/bin/nvim", "--version"], RootMode::No)
+        .exec_capturing_stdout("Checking", "Neovim version", &["/usr/local/bin/nvim", "--version"], RootMode::No)
         .await
         .is_err()
     {
@@ -131,7 +131,7 @@ async fn populate_envs(
     let platform_env = if cfg!(target_os = "macos") {
         "DOCKIM_ON_MACOS"
     } else if cfg!(target_os = "windows")
-        || exec::capturing_stdout(&["uname", "-a"])
+        || exec::capturing_stdout("Checking", "host platform", &["uname", "-a"])
             .await
             .is_ok_and(|s| s.contains("Microsoft"))
     {
@@ -176,7 +176,7 @@ async fn run_neovim_directly(
     args.push("TERM=screen-256color".to_string());
     args.push("nvim".to_string());
     let _suppress = OutputSuppressGuard::new();
-    dc.exec(&args, RootMode::No).await
+    dc.exec("Launching", "Neovim", &args, RootMode::No).await
 }
 
 async fn run_neovim_server_and_attach(
@@ -196,7 +196,7 @@ async fn run_neovim_server_and_attach(
     args.push("--headless".to_string());
     args.push("--listen".to_string());
     args.push(listen);
-    let nvim = Rc::new(Mutex::new(dc.spawn(&args, RootMode::No).await?));
+    let nvim = Rc::new(Mutex::new(dc.spawn("Launching", "Neovim server", &args, RootMode::No).await?));
 
     defer! {
         task::block_in_place(|| {
@@ -272,7 +272,7 @@ async fn run_neovim_client(config: &Config, args: &[String], min_duration: Durat
 }
 
 async fn run_background_neovim_client(args: &[String]) -> Result<()> {
-    let mut child = exec::spawn(args).await?;
+    let mut child = exec::spawn("Launching", "Neovim client (background)", args).await?;
     // wait for minimum duration and check if the child process is still running
     time::sleep(Duration::from_millis(500)).await;
     match child.try_wait().into_diagnostic() {
@@ -286,7 +286,7 @@ async fn run_foreground_neovim_client(args: &[String], min_duration: Duration) -
     let start = Instant::now();
     let output = {
         let _suppress = OutputSuppressGuard::new();
-        exec::exec(args).await
+        exec::exec("Launching", "Neovim client", args).await
     };
     let elapsed = start.elapsed();
 

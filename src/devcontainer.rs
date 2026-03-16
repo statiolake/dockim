@@ -16,7 +16,7 @@ use tokio::{net::TcpListener, process::Child, sync::Mutex};
 
 use crate::{
     exec::{self, ExecOutput},
-    log,
+    log, verbose_log,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,7 +78,7 @@ impl RootMode {
 
 impl DevContainer {
     pub async fn is_cli_installed() -> bool {
-        exec::exec(&[&*Self::devcontainer_command(), "--version"])
+        exec::capturing_stdout("Checking", "devcontainer CLI version", &[&*Self::devcontainer_command(), "--version"])
             .await
             .is_ok()
     }
@@ -111,7 +111,7 @@ impl DevContainer {
             *self.cached_up_output.lock().await = None;
         }
 
-        exec::exec(&args).await?;
+        exec::exec_with_tail("Building", "dev container", &args).await?;
 
         self.enable_host_docker_internal_in_rancher_desktop_on_lima()
             .await?;
@@ -135,7 +135,7 @@ impl DevContainer {
         // Find container by project and service labels
         let project_filter = format!("label=com.docker.compose.project={}", config.project_name);
         let service_filter = format!("label=com.docker.compose.service={}", config.service_name);
-        let output = exec::capturing_stdout(&[
+        let output = exec::capturing_stdout("Querying", "compose container ID", &[
             "docker",
             "ps",
             "-q",
@@ -163,7 +163,7 @@ impl DevContainer {
             user
         } else {
             // Try to get from devcontainer.metadata label or fall back to inspecting the container
-            let user_output = exec::capturing_stdout(&["docker", "exec", &container_id, "whoami"])
+            let user_output = exec::capturing_stdout("Querying", "container remote user", &["docker", "exec", &container_id, "whoami"])
                 .await
                 .unwrap_or_else(|_| "root".to_string());
             user_output.trim().to_string()
@@ -232,7 +232,7 @@ impl DevContainer {
         args.push("--format".to_string());
         args.push("{{.ID}}".to_string());
 
-        let output = exec::capturing_stdout(&args)
+        let output = exec::capturing_stdout("Querying", "container IDs", &args)
             .await
             .wrap_err("failed to list containers")?;
 
@@ -254,7 +254,7 @@ impl DevContainer {
                 .to_string(),
         );
 
-        let output = exec::capturing_stdout(&args)
+        let output = exec::capturing_stdout("Listing", "containers by filters", &args)
             .await
             .wrap_err("failed to list containers")?;
 
@@ -299,7 +299,7 @@ impl DevContainer {
                 .to_string(),
         );
 
-        let output = exec::capturing_stdout(&args)
+        let output = exec::capturing_stdout("Listing", "containers by IDs", &args)
             .await
             .wrap_err("failed to list containers")?;
 
@@ -329,7 +329,7 @@ impl DevContainer {
     }
 
     async fn container_has_config_file_label(&self, container_id: &str) -> Result<bool> {
-        let output = exec::capturing_stdout(&[
+        let output = exec::capturing_stdout("Inspecting", "container labels", &[
             "docker",
             "inspect",
             "--format",
@@ -405,7 +405,7 @@ impl DevContainer {
                 return Ok(());
             }
 
-            exec::exec(&["docker", "compose", "-p", &project_name, "stop"])
+            exec::exec("Stopping", "docker compose stack", &["docker", "compose", "-p", &project_name, "stop"])
                 .await
                 .wrap_err("failed to stop docker compose stack")?;
         } else {
@@ -420,7 +420,7 @@ impl DevContainer {
 
             let mut args = vec!["docker".to_string(), "stop".to_string()];
             args.extend(containers);
-            exec::exec(&args)
+            exec::exec("Stopping", "devcontainer containers", &args)
                 .await
                 .wrap_err("failed to stop devcontainer container(s)")?;
         }
@@ -438,7 +438,7 @@ impl DevContainer {
                 return Ok(());
             }
 
-            exec::exec(&["docker", "compose", "-p", &project_name, "down"])
+            exec::exec("Removing", "docker compose stack", &["docker", "compose", "-p", &project_name, "down"])
                 .await
                 .wrap_err("failed to down docker compose stack")?;
         } else {
@@ -453,7 +453,7 @@ impl DevContainer {
 
             let mut args = vec!["docker".to_string(), "rm".to_string(), "-f".to_string()];
             args.extend(containers);
-            exec::exec(&args)
+            exec::exec("Removing", "devcontainer containers", &args)
                 .await
                 .wrap_err("failed to remove devcontainer container(s)")?;
         }
@@ -463,44 +463,75 @@ impl DevContainer {
         Ok(())
     }
 
-    pub async fn spawn<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<Child> {
+    pub async fn spawn<S: AsRef<str>>(
+        &self,
+        verb: &str,
+        desc: &str,
+        command: &[S],
+        root_mode: RootMode,
+    ) -> Result<Child> {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        exec::spawn(&args).await
+        exec::spawn(verb, desc, &args).await
     }
 
-    pub async fn exec<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Result<()> {
+    pub async fn exec<S: AsRef<str>>(
+        &self,
+        verb: &str,
+        desc: &str,
+        command: &[S],
+        root_mode: RootMode,
+    ) -> Result<()> {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        exec::exec(&args).await
+        exec::exec(verb, desc, &args).await
+    }
+
+    pub async fn exec_tailed<S: AsRef<str>>(
+        &self,
+        verb: &str,
+        desc: &str,
+        command: &[S],
+        root_mode: RootMode,
+    ) -> Result<()> {
+        let mut args = self.make_args(root_mode, "exec");
+        args.extend(command.iter().map(|s| s.as_ref().to_string()));
+
+        exec::exec_with_tail(verb, desc, &args).await
     }
 
     pub async fn exec_capturing_stdout<S: AsRef<str>>(
         &self,
+        verb: &str,
+        desc: &str,
         command: &[S],
         root_mode: RootMode,
     ) -> Result<String> {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        exec::capturing_stdout(&args).await
+        exec::capturing_stdout(verb, desc, &args).await
     }
 
     pub async fn exec_capturing<S: AsRef<str>>(
         &self,
+        verb: &str,
+        desc: &str,
         command: &[S],
         root_mode: RootMode,
     ) -> Result<ExecOutput, ExecOutput> {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        exec::capturing(&args).await
+        exec::capturing(verb, desc, &args).await
     }
 
     pub async fn exec_with_stdin<S: AsRef<str>>(
         &self,
+        verb: &str,
+        desc: &str,
         command: &[S],
         stdin: Stdio,
         root_mode: RootMode,
@@ -508,11 +539,13 @@ impl DevContainer {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        exec::with_stdin(&args, stdin).await
+        exec::with_stdin(verb, desc, &args, stdin).await
     }
 
     pub async fn exec_with_bytes_stdin<S: AsRef<str>>(
         &self,
+        verb: &str,
+        desc: &str,
         command: &[S],
         stdin: &[u8],
         root_mode: RootMode,
@@ -520,7 +553,7 @@ impl DevContainer {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        exec::with_bytes_stdin(&args, stdin).await
+        exec::with_bytes_stdin(verb, desc, &args, stdin).await
     }
 
     pub async fn copy_files_to_container(
@@ -549,29 +582,29 @@ impl DevContainer {
 
         // Copy root files if any
         if !root_files.is_empty() {
-            log!("Copying": "{} files to container root via tar", file_mappings.len());
+            verbose_log!("Copying": "{} files to container root via tar", file_mappings.len());
             let tar_data = Self::create_tar_archive(&root_files).await?;
-            log!("Created": "root tar archive with {} bytes", tar_data.len());
+            verbose_log!("Created": "root tar archive with {} bytes", tar_data.len());
 
             // Extract tar in container
-            self.exec_with_bytes_stdin(&["tar", "-xf", "-", "-C", "/"], &tar_data, root_mode)
+            self.exec_with_bytes_stdin("Copying", "files to container root", &["tar", "-xf", "-", "-C", "/"], &tar_data, root_mode)
                 .await
                 .wrap_err("failed to extract tar archive in container")?;
-            log!("Copied": "files to container home directory");
+            verbose_log!("Copied": "files to container root directory");
         }
 
         // Copy home files if any
         if !home_files.is_empty() {
-            log!("Copying": "{} files to container home directory via tar", file_mappings.len());
+            verbose_log!("Copying": "{} files to container home directory via tar", file_mappings.len());
             let tar_data = Self::create_tar_archive(&home_files).await?;
-            log!("Created": "home tar archive with {} bytes", tar_data.len());
+            verbose_log!("Created": "home tar archive with {} bytes", tar_data.len());
 
             // Extract tar in container home directory
             // We need to wrap command with 'sh -c' to expand $HOME variable
-            self.exec_with_bytes_stdin(&["sh", "-c", "tar -xf - -C $HOME"], &tar_data, root_mode)
+            self.exec_with_bytes_stdin("Copying", "files to container home", &["sh", "-c", "tar -xf - -C $HOME"], &tar_data, root_mode)
                 .await
                 .wrap_err("failed to extract tar archive to home directory in container")?;
-            log!("Copied": "files to container home directory");
+            verbose_log!("Copied": "files to container home directory");
         }
 
         Ok(())
@@ -640,6 +673,7 @@ impl DevContainer {
     pub async fn detect_listening_ports(&self) -> Result<Vec<u16>> {
         let output = self
             .exec_capturing_stdout(
+                "Detecting", "listening ports",
                 &[
                     "sh",
                     "-c",
@@ -714,13 +748,13 @@ impl DevContainer {
     }
 
     async fn enable_host_docker_internal_in_rancher_desktop_on_lima(&self) -> Result<()> {
-        if exec::exec(&["rdctl", "version"]).await.is_err() {
+        if exec::exec("Checking", "Rancher Desktop", &["rdctl", "version"]).await.is_err() {
             // Not using Rancher Desktop, skipping
             return Ok(());
         }
 
         let host_ip_addr = {
-            let vm_hosts = exec::capturing_stdout(&["rdctl", "shell", "cat", "/etc/hosts"])
+            let vm_hosts = exec::capturing_stdout("Reading", "Rancher Desktop VM hosts", &["rdctl", "shell", "cat", "/etc/hosts"])
                 .await
                 .wrap_err("failed to read /etc/hosts on Rancher Desktop VM")?;
             let Some(ip_addr) = vm_hosts.lines().find_map(|line| {
@@ -743,6 +777,7 @@ impl DevContainer {
         // ないのは微妙なので、エラー時は無視して続行する。
         let _ = self
             .exec(
+                "Modifying", "container /etc/hosts for Rancher Desktop",
                 &[
                     "sh",
                     "-c",
@@ -770,7 +805,7 @@ impl DevContainer {
         }
 
         let container_hosts = self
-            .exec_capturing_stdout(&["cat", "/etc/hosts"], RootMode::No)
+            .exec_capturing_stdout("Reading", "container /etc/hosts", &["cat", "/etc/hosts"], RootMode::No)
             .await
             .wrap_err("failed to read /etc/hosts")?;
 
@@ -781,6 +816,7 @@ impl DevContainer {
 
         let host_ip_addr = self
             .exec_capturing_stdout(
+                "Querying", "default gateway IP",
                 &["sh", "-c", "ip route | grep default | cut -d' ' -f3"],
                 RootMode::No,
             )
@@ -789,6 +825,7 @@ impl DevContainer {
             .unwrap_or_else(|_| "172.17.0.1".to_string()); // デフォルト値にフォールバック
 
         self.exec(
+            "Modifying", "container /etc/hosts for Linux",
             &[
                 "sh",
                 "-c",
@@ -1227,7 +1264,7 @@ fn make_docker_compose_args(compose_paths: &[PathBuf], tail_args: &[&str]) -> Ve
 
 async fn get_compose_project_name_from_docker(compose_paths: &[PathBuf]) -> Result<Option<String>> {
     let args = make_docker_compose_args(compose_paths, &["config", "--format", "json"]);
-    let output = exec::capturing_stdout(&args)
+    let output = exec::capturing_stdout("Querying", "compose project name", &args)
         .await
         .wrap_err("failed to read compose project name via docker compose config")?;
 
@@ -1240,7 +1277,7 @@ async fn get_compose_project_name_from_docker(compose_paths: &[PathBuf]) -> Resu
 
 async fn resolve_compose_service_names(compose_paths: &[PathBuf]) -> Result<Vec<String>> {
     let args = make_docker_compose_args(compose_paths, &["config", "--services"]);
-    let output = exec::capturing_stdout(&args)
+    let output = exec::capturing_stdout("Querying", "compose service names", &args)
         .await
         .wrap_err("failed to read compose services via docker compose config")?;
 

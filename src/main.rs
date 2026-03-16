@@ -14,6 +14,7 @@ use tokio::task::JoinSet;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    dockim::log::set_verbose(args.verbose);
 
     check_requirements().await?;
     let config = Config::load_config()?;
@@ -69,7 +70,7 @@ async fn check_requirements() -> Result<()> {
         );
     }
 
-    if exec::exec(&["docker", "--version"]).await.is_err() {
+    if exec::capturing_stdout("Checking", "Docker version", &["docker", "--version"]).await.is_err() {
         bail!(
             help = "install or start Docker Desktop first",
             "Docker is not installed or not running",
