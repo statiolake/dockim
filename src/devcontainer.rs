@@ -120,60 +120,69 @@ impl DevContainer {
         Ok(())
     }
 
-    /// Inspect the running devcontainer without starting it
-    /// Uses docker commands directly instead of devcontainer CLI for speed
+    /// Inspect the running devcontainer without starting it.
+    /// Uses devcontainer labels (devcontainer.local_folder / devcontainer.config_file)
+    /// to find the container directly, avoiding compose project name mismatches.
     pub async fn inspect(&self, logger: &Logger) -> Result<UpOutput> {
         // Check cache first
         if let Some(cached) = self.cached_up_output.lock().await.as_ref() {
             return Ok(cached.clone());
         }
 
-        let config = get_compose_config(&self.workspace_folder, &self.config_path)
-            .await?
-            .ok_or_else(|| miette!("This devcontainer does not use docker-compose"))?;
-
-        // Find container by project and service labels
-        let project_filter = format!("label=com.docker.compose.project={}", config.project_name);
-        let service_filter = format!("label=com.docker.compose.service={}", config.service_name);
-        let output = exec::capturing_stdout(logger, "Querying", "compose container ID", &[
-            "docker",
-            "ps",
-            "-q",
-            "--filter",
-            &project_filter,
-            "--filter",
-            &service_filter,
-        ])
-        .await
-        .wrap_err("failed to find compose container")?;
+        // Find container by devcontainer labels (more reliable than compose project name)
+        let filters = self.devcontainer_label_filters();
+        let mut args = vec![
+            "docker".to_string(),
+            "ps".to_string(),
+            "-q".to_string(),
+        ];
+        for filter in &filters {
+            args.push("--filter".to_string());
+            args.push(filter.clone());
+        }
+        let output = exec::capturing_stdout(logger, "Querying", "devcontainer ID", &args)
+            .await
+            .wrap_err("failed to find devcontainer")?;
 
         let container_id = output
             .lines()
             .next()
+            .filter(|s| !s.is_empty())
             .ok_or_else(|| {
                 miette!(
-                    "No running container found for service '{}'",
-                    config.service_name
+                    "No running devcontainer found for workspace '{}' config '{}'",
+                    self.workspace_folder.display(),
+                    self.config_path.display(),
                 )
             })?
             .to_string();
 
-        // Get remote user from container if not specified in config
-        let remote_user = if let Some(user) = config.remote_user {
-            user
+        // Read devcontainer.json for remote user and workspace folder
+        let devcontainer_json = load_devcontainer_json(&self.config_path)?;
+        let remote_user = if let Some(user) = devcontainer_json["remoteUser"].as_str() {
+            user.to_string()
         } else {
-            // Try to get from devcontainer.metadata label or fall back to inspecting the container
-            let user_output = exec::capturing_stdout(logger, "Querying", "container remote user", &["docker", "exec", &container_id, "whoami"])
-                .await
-                .unwrap_or_else(|_| "root".to_string());
+            let user_output = exec::capturing_stdout(
+                logger,
+                "Querying",
+                "container remote user",
+                &["docker", "exec", &container_id, "whoami"],
+            )
+            .await
+            .unwrap_or_else(|_| "root".to_string());
             user_output.trim().to_string()
         };
+
+        let remote_workspace_folder = devcontainer_json["workspaceFolder"]
+            .as_str()
+            .unwrap_or("/")
+            .to_string();
 
         let result = UpOutput {
             outcome: "success".to_string(),
             container_id,
             remote_user,
-            remote_workspace_folder: config.workspace_folder,
+            remote_workspace_folder,
         };
 
         // Cache the result
@@ -1060,53 +1069,6 @@ async fn compute_compose_project_name(
             )
         })?;
     Ok(Some(normalize_project_name(dir_name)))
-}
-
-/// Information extracted from devcontainer.json for compose-based containers
-#[derive(Debug, Clone)]
-struct ComposeConfig {
-    project_name: String,
-    service_name: String,
-    remote_user: Option<String>,
-    workspace_folder: String,
-}
-
-/// Extract compose configuration from devcontainer.json
-async fn get_compose_config(
-    workspace_folder: &Path,
-    config_path: &Path,
-) -> Result<Option<ComposeConfig>> {
-    let devcontainer_json = load_devcontainer_json(config_path)?;
-
-    // Check if this is a compose-based devcontainer
-    let project_name = match compute_compose_project_name(workspace_folder, config_path).await? {
-        Some(name) => name,
-        None => return Ok(None),
-    };
-
-    // Get service name (required for compose)
-    let service_name = devcontainer_json["service"]
-        .as_str()
-        .ok_or_else(|| miette!("devcontainer.json is missing 'service' field for compose"))?
-        .to_string();
-
-    // Get remote user (optional, defaults will be handled later)
-    let remote_user = devcontainer_json["remoteUser"]
-        .as_str()
-        .map(|s| s.to_string());
-
-    // Get workspace folder (required for compose, defaults to "/")
-    let workspace_folder_str = devcontainer_json["workspaceFolder"]
-        .as_str()
-        .unwrap_or("/")
-        .to_string();
-
-    Ok(Some(ComposeConfig {
-        project_name,
-        service_name,
-        remote_user,
-        workspace_folder: workspace_folder_str,
-    }))
 }
 
 fn update_host_docker_internal_devcontainer_json_value(value: &mut Value) {
