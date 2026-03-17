@@ -8,7 +8,6 @@ use crate::{
     cli::{Args, BuildArgs},
     config::Config,
     devcontainer::{ContainerFileDestination, DevContainer, RootMode},
-    exec,
     progress::Logger,
 };
 
@@ -165,7 +164,7 @@ async fn install_neovim(
         ));
     }
 
-    eprintln!("Warning: Binary installation failed due to glibc compatibility, falling back to source build");
+    logger.write("Warning: Binary installation failed due to glibc compatibility, falling back to source build");
     install_neovim_from_source(logger, config, dc).await
 }
 
@@ -307,7 +306,7 @@ async fn setup_github_cli(logger: &Logger, dc: &DevContainer) -> Result<()> {
         };
 
         // Get the latest release version from GitHub API on host machine
-        let api_response = exec::capturing_stdout(logger, "Querying", "latest GitHub CLI release", &[
+        let api_response = logger.capturing_stdout("Querying", "latest GitHub CLI release", &[
             "curl",
             "-s",
             "https://api.github.com/repos/cli/cli/releases/latest",
@@ -358,7 +357,7 @@ async fn setup_github_cli(logger: &Logger, dc: &DevContainer) -> Result<()> {
     }
 
     async fn login(logger: &Logger, dc: &DevContainer) -> Result<()> {
-        let token = exec::capturing_stdout(logger, "Querying", "GitHub auth token", &["gh", "auth", "token"]).await?;
+        let token = logger.capturing_stdout("Querying", "GitHub auth token", &["gh", "auth", "token"]).await?;
         dc.exec_with_bytes_stdin(
             logger,
             "Logging in", "to GitHub CLI",

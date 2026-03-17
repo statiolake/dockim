@@ -6,7 +6,6 @@ use tokio::{sync::mpsc, task::JoinSet};
 
 use crate::{
     devcontainer::{DevContainer, ForwardedPort},
-    exec,
     progress::Logger,
 };
 
@@ -27,7 +26,7 @@ impl PortForwarder {
         let bg_logger = logger.clone();
         join_set.spawn(async move {
             while let Some(container_name) = stop_rx.recv().await {
-                let _ = exec::exec(&bg_logger, "Stopping", "port-forward container", &["docker", "stop", &container_name]).await;
+                let _ = bg_logger.exec("Stopping", "port-forward container", &["docker", "stop", &container_name]).await;
             }
         });
         Self {
@@ -62,7 +61,7 @@ impl PortForwarder {
             ip_address: String,
         }
 
-        let network_output = exec::capturing_stdout(&self.logger, "Inspecting", "container network settings", &[
+        let network_output = self.logger.capturing_stdout("Inspecting", "container network settings", &[
             "docker",
             "inspect",
             "--format",
@@ -86,7 +85,7 @@ impl PortForwarder {
             container_network.ip_address, container_port
         );
 
-        exec::exec(&self.logger, "Launching", "port-forward container", &[
+        self.logger.exec("Launching", "port-forward container", &[
             "docker",
             "run",
             "-d",
@@ -112,7 +111,7 @@ impl PortForwarder {
             .socat_container_name(host_port)
             .await
             .wrap_err("failed to determine port-forwarding container name")?;
-        exec::exec(&self.logger, "Stopping", "port-forward container", &["docker", "stop", &socat_container_name]).await
+        self.logger.exec("Stopping", "port-forward container", &["docker", "stop", &socat_container_name]).await
     }
 
     pub async fn list_forwarded_ports(&self) -> Result<Vec<ForwardedPort>> {
@@ -122,7 +121,7 @@ impl PortForwarder {
             .wrap_err("failed to determine port-forwarding container name")?;
 
         let name_filter = format!("name={socat_container_name_prefix}");
-        let port_forward_containers = exec::capturing_stdout(&self.logger, "Listing", "port-forward containers", &[
+        let port_forward_containers = self.logger.capturing_stdout("Listing", "port-forward containers", &[
             "docker",
             "ps",
             "--filter",

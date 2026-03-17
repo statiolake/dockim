@@ -33,45 +33,45 @@ pub async fn main(
     let forwarder = PortForwarder::new(dc, logger.clone(), join_set);
 
     match &port_args.subcommand {
-        PortSubcommand::Add(add_args) => add_port(&forwarder, add_args).await,
-        PortSubcommand::Rm(rm_args) => remove_port(&forwarder, rm_args).await,
-        PortSubcommand::Ls(_ls_args) => list_ports(&forwarder).await,
+        PortSubcommand::Add(add_args) => add_port(logger, &forwarder, add_args).await,
+        PortSubcommand::Rm(rm_args) => remove_port(logger, &forwarder, rm_args).await,
+        PortSubcommand::Ls(_ls_args) => list_ports(logger, &forwarder).await,
     }
 }
 
-async fn add_port(forwarder: &PortForwarder, add_args: &PortAddArgs) -> Result<()> {
+async fn add_port(logger: &Logger, forwarder: &PortForwarder, add_args: &PortAddArgs) -> Result<()> {
     let (host_port, container_port) = parse_port_descriptor(&add_args.port_descriptor)?;
 
     // We need to forget because forward_port() returns a guard that will stop forwarding on drop
     mem::forget(forwarder.forward_port(host_port, container_port).await?);
 
-    println!("Port forwarding started: {host_port}:{container_port}");
+    logger.write(&format!("Port forwarding started: {host_port}:{container_port}"));
     Ok(())
 }
 
-async fn remove_port(forwarder: &PortForwarder, rm_args: &PortRmArgs) -> Result<()> {
+async fn remove_port(logger: &Logger, forwarder: &PortForwarder, rm_args: &PortRmArgs) -> Result<()> {
     if rm_args.all {
         forwarder.remove_all_forwarded_ports().await?;
-        println!("All port forwards removed");
+        logger.write("All port forwards removed");
     } else if let Some(port_descriptor) = &rm_args.port_descriptor {
         let (host_port, _) = parse_port_descriptor(port_descriptor)?;
         forwarder.stop_forward_port(host_port).await?;
-        println!("Port forwarding stopped: {host_port}");
+        logger.write(&format!("Port forwarding stopped: {host_port}"));
     } else {
         bail!("Must specify either a port descriptor or --all flag");
     }
     Ok(())
 }
 
-async fn list_ports(forwarder: &PortForwarder) -> Result<()> {
+async fn list_ports(logger: &Logger, forwarder: &PortForwarder) -> Result<()> {
     let ports = forwarder.list_forwarded_ports().await?;
 
     if ports.is_empty() {
-        println!("No port forwards active");
+        logger.write("No port forwards active");
     } else {
         use tabled::{builder::Builder, settings::Style};
 
-        println!("Active port forwards:");
+        logger.write("Active port forwards:");
         let mut builder = Builder::new();
         builder.push_record(["Host Port", "Container Port"]);
         for port in &ports {
@@ -80,7 +80,7 @@ async fn list_ports(forwarder: &PortForwarder) -> Result<()> {
 
         let table = builder.build().with(Style::modern()).to_string();
         for line in table.lines() {
-            println!("  {line}");
+            logger.write(&format!("  {line}"));
         }
     }
 

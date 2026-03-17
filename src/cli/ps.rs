@@ -39,41 +39,41 @@ pub async fn main(logger: &Logger, _config: &Config, args: &Args, _ps_args: &PsA
         (None, None)
     };
 
-    print_configuration(&workspace_folder, &config_path);
+    print_configuration(logger, &workspace_folder, &config_path);
 
-    println!();
-    println!("Compose");
+    logger.write("");
+    logger.write("Compose");
     if let Some(project_name) = compose_project {
-        println!("  Project: {}", project_name);
-        println!(
+        logger.write(&format!("  Project: {}", project_name));
+        logger.write(&format!(
             "  Service: {}",
             compose_service.unwrap_or_else(|| "(missing `service` field)".to_string())
-        );
-        println!("  Files:");
+        ));
+        logger.write("  Files:");
         for compose_file in compose_files.unwrap_or_default() {
-            println!("    - {}", compose_file.display());
+            logger.write(&format!("    - {}", compose_file.display()));
         }
     } else {
-        println!("  Not used (dockerComposeFile is not configured)");
+        logger.write("  Not used (dockerComposeFile is not configured)");
     }
 
-    println!();
-    println!("Containers");
+    logger.write("");
+    logger.write("Containers");
     if let Some(err) = container_error {
-        println!("  failed to list containers: {err}");
+        logger.write(&format!("  failed to list containers: {err}"));
         return Ok(());
     }
     if containers.is_empty() {
-        println!("  (none)");
+        logger.write("  (none)");
         return Ok(());
     }
 
-    print_containers_table(&containers);
+    print_containers_table(logger, &containers);
 
     Ok(())
 }
 
-fn print_containers_table(containers: &[ComposeContainerInfo]) {
+fn print_containers_table(logger: &Logger, containers: &[ComposeContainerInfo]) {
     use tabled::{builder::Builder, settings::Style};
 
     let mut builder = Builder::new();
@@ -95,12 +95,12 @@ fn print_containers_table(containers: &[ComposeContainerInfo]) {
 
     let table = builder.build().with(Style::modern()).to_string();
     for line in table.lines() {
-        println!("  {line}");
+        logger.write(&format!("  {line}"));
     }
 }
 
-fn print_configuration(workspace_folder: &std::path::Path, config_path: &std::path::Path) {
-    println!("Configuration");
-    println!("  Workspace: {}", workspace_folder.display());
-    println!("  Config:    {}", config_path.display());
+fn print_configuration(logger: &Logger, workspace_folder: &std::path::Path, config_path: &std::path::Path) {
+    logger.write("Configuration");
+    logger.write(&format!("  Workspace: {}", workspace_folder.display()));
+    logger.write(&format!("  Config:    {}", config_path.display()));
 }

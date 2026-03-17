@@ -1,611 +1,340 @@
 use std::{
-    collections::BTreeMap,
     fmt::Debug,
-    io::{IsTerminal, Write},
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        OnceLock,
-    },
+    process::Stdio,
+    sync::OnceLock,
 };
 
 use colored::Colorize;
-use crossterm::{cursor, execute, terminal};
-use tokio::sync::mpsc;
-use unicode_width::UnicodeWidthStr;
+use miette::Result;
+use tokio::process::Child;
+
+use crate::{
+    console::Console,
+    exec::{self, ExecOutput},
+};
 
 const MAX_TAIL_LINES: usize = 5;
 
-// --- SpanId ---
+// --- Global root console for root_logger() fallback ---
 
-static NEXT_SPAN_ID: AtomicU64 = AtomicU64::new(1);
-static VERBOSE: AtomicBool = AtomicBool::new(false);
+static ROOT_CONSOLE: OnceLock<Console> = OnceLock::new();
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SpanId(u64);
+/// Initialize the progress system and return a root Logger.
+pub fn init(verbose: bool) -> Logger {
+    let console = Console::new();
+    let _ = ROOT_CONSOLE.set(console.clone());
+    Logger {
+        console,
+        verbose,
+        prefix: String::new(),
+    }
+}
 
-impl SpanId {
-    fn next() -> Self {
-        Self(NEXT_SPAN_ID.fetch_add(1, Ordering::Relaxed))
+/// Get a root logger (for contexts that don't receive a Logger parameter).
+pub fn root_logger() -> Logger {
+    let console = ROOT_CONSOLE.get_or_init(Console::new).clone();
+    Logger {
+        console,
+        verbose: false,
+        prefix: String::new(),
     }
 }
 
 // --- Logger ---
 
-/// A logger that can be passed around to log exec steps and create sub-spans.
-/// Cheap to clone (just an Option<SpanId> + channel sender).
+/// A logger that formats output and manages spans and steps.
+/// Cheap to clone (shares the underlying Console via Arc).
 #[derive(Clone)]
 pub struct Logger {
-    span_id: Option<SpanId>,
-    handle: ProgressHandle,
+    console: Console,
+    verbose: bool,
+    prefix: String,
 }
 
 impl Logger {
-    /// Create a child span. Returns a new Logger scoped to it.
-    /// The span header is printed immediately.
-    /// When the returned Logger is dropped, the span is closed.
-    pub fn span(&self, verb: &str, desc: &str) -> Logger {
-        let id = SpanId::next();
-        self.handle.send(ProgressEvent::SpanEnter {
-            id,
-            verb: verb.to_string(),
-            desc: desc.to_string(),
-        });
+    pub fn new(console: Console, verbose: bool) -> Self {
         Logger {
-            span_id: Some(id),
-            handle: self.handle.clone(),
+            console,
+            verbose,
+            prefix: String::new(),
         }
     }
 
-    /// Log a standalone message.
+    /// Create a child span. The header is printed immediately.
+    /// Returns a new Logger scoped to the span.
+    /// When the returned Logger is dropped, the span content is committed to the parent.
+    pub fn span(&self, verb: &str, desc: &str) -> Logger {
+        let child = self.console.child();
+        child.write_line(&format!(
+            "{}{:>10} {}",
+            self.prefix,
+            verb.bright_green(),
+            desc
+        ));
+        Logger {
+            console: child,
+            verbose: self.verbose,
+            prefix: format!("{}    ", self.prefix),
+        }
+    }
+
+    /// Create a new in-progress step. The step is committed when dropped.
+    /// The caller can override the step's state before drop.
+    pub fn step(&self, verb: &str, desc: &str) -> LogStep {
+        let child = self.console.child();
+        let step = LogStep {
+            console: child,
+            verb: verb.to_string(),
+            desc: desc.to_string(),
+            state: StepState::InProgress,
+            tail: Vec::new(),
+            all_lines: Vec::new(),
+            verbose_line: None,
+            verbose: self.verbose,
+            prefix: self.prefix.clone(),
+        };
+        step.update_live();
+        step
+    }
+
+    /// Log a standalone formatted message (verb + desc).
     pub fn log(&self, verb: &str, desc: &str) {
-        self.handle.send(ProgressEvent::Log {
-            verb: verb.to_string(),
-            desc: desc.to_string(),
-        });
+        self.console.write_line(&format!(
+            "{}{:>10} {}",
+            self.prefix,
+            verb.bright_green(),
+            desc
+        ));
     }
 
-    /// Log an exec step (called by exec functions).
-    pub fn log_exec<S: AsRef<str> + Debug>(&self, verb: &str, desc: &str, args: &[S]) {
-        self.handle.send(ProgressEvent::Step {
-            span_id: self.span_id,
-            verb: verb.to_string(),
-            desc: desc.to_string(),
-        });
-        if VERBOSE.load(Ordering::Relaxed) {
-            self.handle.send(ProgressEvent::Verbose {
-                span_id: self.span_id,
-                line: format!("{args:?}"),
-            });
+    /// Write raw text to the output. Each line gets the current prefix prepended.
+    pub fn write(&self, text: &str) {
+        if self.prefix.is_empty() {
+            self.console.write_line(text);
+        } else {
+            let prefixed: String = text
+                .lines()
+                .map(|line| {
+                    if line.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}{}", self.prefix, line)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.console.write_line(&prefixed);
         }
     }
 
-    /// Send a tail output line.
-    pub fn tail_line(&self, line: String) {
-        self.handle.send(ProgressEvent::TailLine {
-            span_id: self.span_id,
-            line,
-        });
+    pub fn verbose(&self) -> bool {
+        self.verbose
     }
 
-    /// Mark the current step as done, with optional summary.
-    pub fn step_done(&self, summary: Option<String>) {
-        self.handle.send(ProgressEvent::StepDone {
-            span_id: self.span_id,
-            summary,
-        });
+    // --- Convenience exec methods ---
+    // These create a step internally and call the corresponding exec function.
+
+    pub async fn exec<S: AsRef<str> + Debug>(&self, verb: &str, desc: &str, args: &[S]) -> Result<()> {
+        let mut step = self.step(verb, desc);
+        exec::run(&mut step, args).await
     }
 
-    /// Mark the current step as failed.
-    pub fn step_failed(&self) {
-        self.handle.send(ProgressEvent::StepFailed {
-            span_id: self.span_id,
-        });
+    pub async fn exec_with_tail<S: AsRef<str> + Debug>(&self, verb: &str, desc: &str, args: &[S]) -> Result<()> {
+        let mut step = self.step(verb, desc);
+        exec::run_with_tail(&mut step, args).await
     }
 
-    pub fn span_id(&self) -> Option<SpanId> {
-        self.span_id
+    pub async fn capturing_stdout<S: AsRef<str> + Debug>(&self, verb: &str, desc: &str, args: &[S]) -> Result<String> {
+        let mut step = self.step(verb, desc);
+        exec::run_capturing_stdout(&mut step, args).await
     }
-}
 
-impl Drop for Logger {
-    fn drop(&mut self) {
-        if let Some(id) = self.span_id {
-            self.handle.send(ProgressEvent::SpanExit { id });
-        }
+    pub async fn capturing<S: AsRef<str> + Debug>(
+        &self,
+        verb: &str,
+        desc: &str,
+        args: &[S],
+    ) -> std::result::Result<ExecOutput, ExecOutput> {
+        let mut step = self.step(verb, desc);
+        exec::run_capturing(&mut step, args).await
     }
-}
 
-// --- Events ---
+    pub async fn spawn<S: AsRef<str> + Debug>(&self, verb: &str, desc: &str, args: &[S]) -> Result<Child> {
+        let mut step = self.step(verb, desc);
+        exec::run_spawn(&mut step, args).await
+    }
 
-pub enum ProgressEvent {
-    /// A new span started (top-level group header)
-    SpanEnter {
-        id: SpanId,
-        verb: String,
-        desc: String,
-    },
-    /// A sub-step within a span (or top-level if span_id is None)
-    Step {
-        span_id: Option<SpanId>,
-        verb: String,
-        desc: String,
-    },
-    /// A tail output line from a running command
-    TailLine {
-        span_id: Option<SpanId>,
-        line: String,
-    },
-    /// Current step within span succeeded; clear its tail
-    StepDone {
-        span_id: Option<SpanId>,
-        /// Optional short summary to show next to the checkmark (e.g. version)
-        summary: Option<String>,
-    },
-    /// Current step failed; dump all output in red
-    StepFailed {
-        span_id: Option<SpanId>,
-    },
-    /// Span is finished (dropped)
-    SpanExit {
-        id: SpanId,
-    },
-    /// Verbose detail line
-    Verbose {
-        span_id: Option<SpanId>,
-        line: String,
-    },
-    /// A standalone log message (not tied to exec)
-    Log {
-        verb: String,
-        desc: String,
-    },
-}
+    pub async fn with_stdin<S: AsRef<str> + Debug>(
+        &self,
+        verb: &str,
+        desc: &str,
+        args: &[S],
+        stdin: Stdio,
+    ) -> Result<()> {
+        let mut step = self.step(verb, desc);
+        exec::run_with_stdin(&mut step, args, stdin).await
+    }
 
-// --- Global handle ---
-
-static PROGRESS_HANDLE: OnceLock<ProgressHandle> = OnceLock::new();
-
-/// Initialize the progress system and return a root Logger.
-pub fn init(verbose: bool) -> Logger {
-    VERBOSE.store(verbose, Ordering::Relaxed);
-    let handle = ProgressRenderer::start(verbose);
-    let _ = PROGRESS_HANDLE.set(handle.clone());
-    Logger {
-        span_id: None,
-        handle,
+    pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(
+        &self,
+        verb: &str,
+        desc: &str,
+        args: &[S],
+        bytes: &[u8],
+    ) -> Result<()> {
+        let mut step = self.step(verb, desc);
+        exec::run_with_bytes_stdin(&mut step, args, bytes).await
     }
 }
 
-/// Get a root logger (for test environments or late initialization).
-pub fn root_logger() -> Logger {
-    let handle = PROGRESS_HANDLE
-        .get_or_init(|| ProgressRenderer::start(false))
-        .clone();
-    Logger {
-        span_id: None,
-        handle,
-    }
+// --- StepState ---
+
+enum StepState {
+    InProgress,
+    Completed(Option<String>),
+    Failed,
 }
 
-// --- ProgressHandle ---
+// --- LogStep ---
 
-#[derive(Clone)]
-pub struct ProgressHandle {
-    tx: mpsc::UnboundedSender<ProgressEvent>,
-}
-
-impl ProgressHandle {
-    pub fn send(&self, event: ProgressEvent) {
-        let _ = self.tx.send(event);
-    }
-}
-
-// --- Renderer state ---
-
-struct StepState {
+/// An in-progress step. Owns a child Console that is committed on drop.
+/// The caller controls the final state (completed/failed) before dropping.
+pub struct LogStep {
+    console: Console,
     verb: String,
     desc: String,
+    state: StepState,
     tail: Vec<String>,
     all_lines: Vec<String>,
     verbose_line: Option<String>,
-    summary: Option<String>,
-    completed: bool,
-    failed: bool,
-}
-
-struct SpanState {
-    verb: String,
-    desc: String,
-    steps: Vec<StepState>,
-    /// True if this is an auto-created span for a top-level exec (no LogSpan).
-    /// Renders without a separate header (the step itself is the header).
-    toplevel: bool,
-}
-
-struct ProgressRenderer {
-    rx: mpsc::UnboundedReceiver<ProgressEvent>,
-    spans: BTreeMap<SpanId, SpanState>,
-    rendered_lines: usize,
-    is_tty: bool,
     verbose: bool,
+    prefix: String,
 }
 
-impl ProgressRenderer {
-    fn start(verbose: bool) -> ProgressHandle {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let renderer = Self {
-            rx,
-            spans: BTreeMap::new(),
-            rendered_lines: 0,
-            is_tty: std::io::stderr().is_terminal(),
-            verbose,
-        };
-        tokio::spawn(renderer.run());
-        ProgressHandle { tx }
+impl LogStep {
+    /// Mark the step as completed with an optional summary.
+    /// Does not consume the step — the commit happens on drop.
+    pub fn set_completed(&mut self, summary: Option<String>) {
+        self.state = StepState::Completed(summary);
+        self.tail.clear();
+        self.update_live();
     }
 
-    async fn run(mut self) {
-        while let Some(event) = self.rx.recv().await {
-            self.handle_event(event);
-            // Drain all pending events before rendering (debounce)
-            while let Ok(event) = self.rx.try_recv() {
-                self.handle_event(event);
-            }
-            self.render();
-        }
+    /// Mark the step as failed.
+    /// Does not consume the step — the commit happens on drop.
+    pub fn set_failed(&mut self) {
+        self.state = StepState::Failed;
+        self.update_live();
     }
 
-    fn handle_event(&mut self, event: ProgressEvent) {
-        if !self.is_tty {
-            self.handle_event_linear(event);
-            return;
-        }
-
-        // Before starting a new operation, commit any finished toplevel spans.
-        // This gives callers time to call step_done() to override step_failed()
-        // between the exec return and the next operation.
-        match &event {
-            ProgressEvent::SpanEnter { .. }
-            | ProgressEvent::Step { .. }
-            | ProgressEvent::Log { .. } => {
-                self.auto_commit_finished_toplevel_spans();
-            }
-            _ => {}
-        }
-
-        match event {
-            ProgressEvent::SpanEnter { id, verb, desc } => {
-                self.spans.insert(
-                    id,
-                    SpanState {
-                        verb,
-                        desc,
-                        steps: Vec::new(),
-                        toplevel: false,
-                    },
-                );
-            }
-            ProgressEvent::Step {
-                span_id,
-                verb,
-                desc,
-            } => {
-                if let Some(id) = span_id {
-                    if let Some(span) = self.spans.get_mut(&id) {
-                        span.steps.push(StepState {
-                            verb,
-                            desc,
-                            tail: Vec::new(),
-                            all_lines: Vec::new(),
-                            verbose_line: None,
-                            summary: None,
-                            completed: false,
-                            failed: false,
-                        });
-                    }
-                } else {
-                    // Top-level step without a span: create an ephemeral toplevel span
-                    let id = SpanId::next();
-                    let mut span = SpanState {
-                        verb: verb.clone(),
-                        desc: desc.clone(),
-                        steps: Vec::new(),
-                        toplevel: true,
-                    };
-                    span.steps.push(StepState {
-                        verb,
-                        desc,
-                        tail: Vec::new(),
-                        all_lines: Vec::new(),
-                        verbose_line: None,
-                        summary: None,
-                        completed: false,
-                        failed: false,
-                    });
-                    self.spans.insert(id, span);
-                }
-            }
-            ProgressEvent::TailLine { span_id, line } => {
-                let span = match span_id {
-                    Some(id) => self.spans.get_mut(&id),
-                    None => self.spans.values_mut().last(),
-                };
-                if let Some(span) = span {
-                    if let Some(step) = span.steps.last_mut() {
-                        step.all_lines.push(line.clone());
-                        step.tail.push(line);
-                        if step.tail.len() > MAX_TAIL_LINES {
-                            step.tail.remove(0);
-                        }
-                    }
-                }
-            }
-            ProgressEvent::StepDone { span_id, summary } => {
-                let span = match span_id {
-                    Some(id) => self.spans.get_mut(&id),
-                    None => self.spans.values_mut().last(),
-                };
-                if let Some(span) = span {
-                    if let Some(step) = span.steps.last_mut() {
-                        step.completed = true;
-                        step.failed = false; // override failed if called after step_failed
-                        step.summary = summary;
-                        step.tail.clear();
-                    }
-                }
-            }
-            ProgressEvent::StepFailed { span_id } => {
-                let span = match span_id {
-                    Some(id) => self.spans.get_mut(&id),
-                    None => self.spans.values_mut().last(),
-                };
-                if let Some(span) = span {
-                    if let Some(step) = span.steps.last_mut() {
-                        step.failed = true;
-                    }
-                }
-            }
-            ProgressEvent::SpanExit { id } => {
-                // Commit this span: render it one final time to committed zone
-                // commit_span removes the span from self.spans internally
-                if self.is_tty {
-                    self.commit_span(id);
-                } else {
-                    self.spans.remove(&id);
-                }
-            }
-            ProgressEvent::Verbose { span_id, line } => {
-                if !self.verbose {
-                    return;
-                }
-                let span = match span_id {
-                    Some(id) => self.spans.get_mut(&id),
-                    None => self.spans.values_mut().last(),
-                };
-                if let Some(span) = span {
-                    if let Some(step) = span.steps.last_mut() {
-                        step.verbose_line = Some(line);
-                    }
-                }
-            }
-            ProgressEvent::Log { verb, desc } => {
-                // Standalone log: commit immediately
-                if self.is_tty {
-                    self.clear_live_region();
-                }
-                let mut stderr = std::io::stderr();
-                let _ = write!(stderr, "{:>10}", verb.bright_green());
-                let _ = writeln!(stderr, " {desc}");
-                if self.is_tty {
-                    self.render_live_region();
-                }
-            }
-        }
+    /// Consume and drop the step, committing it as completed.
+    pub fn complete(mut self) {
+        self.set_completed(None);
     }
 
-    fn commit_span(&mut self, id: SpanId) {
-        // Remove span from live tracking; take ownership for final render
-        let Some(span) = self.spans.remove(&id) else {
-            return;
-        };
-
-        // Clear live region first
-        self.clear_live_region();
-
-        let mut stderr = std::io::stderr();
-
-        // Collect and print committed output
-        let mut output_lines: Vec<String> = Vec::new();
-        if span.toplevel {
-            for step in &span.steps {
-                collect_step_lines(&mut output_lines, step, "", self.verbose);
-            }
-        } else {
-            output_lines.push(format!("{:>10} {}", span.verb.bright_green(), span.desc));
-            for step in &span.steps {
-                collect_step_lines(&mut output_lines, step, "    ", self.verbose);
-            }
-        }
-        for line in &output_lines {
-            let _ = writeln!(stderr, "{line}");
-        }
-
-        // Re-render remaining live spans
-        self.render_live_region();
+    /// Consume and drop with a summary.
+    pub fn complete_with_summary(mut self, summary: String) {
+        self.set_completed(Some(summary));
     }
 
-    /// Auto-commit toplevel spans where all steps are done (completed or failed).
-    fn auto_commit_finished_toplevel_spans(&mut self) {
-        let finished_ids: Vec<SpanId> = self
-            .spans
-            .iter()
-            .filter(|(_, s)| s.toplevel && !s.steps.is_empty() && s.steps.iter().all(|st| st.completed || st.failed))
-            .map(|(id, _)| *id)
-            .collect();
-
-        for id in finished_ids {
-            if self.is_tty {
-                self.commit_span(id);
-            } else {
-                self.spans.remove(&id);
-            }
-        }
+    /// Consume and drop as failed.
+    pub fn fail(mut self) {
+        self.set_failed();
     }
 
-    fn render(&mut self) {
-        if !self.is_tty {
-            return;
+    /// Add a tail output line (shown while in progress).
+    pub fn tail_line(&mut self, line: String) {
+        self.all_lines.push(line.clone());
+        self.tail.push(line);
+        if self.tail.len() > MAX_TAIL_LINES {
+            self.tail.remove(0);
         }
-
-        self.clear_live_region();
-        self.render_live_region();
+        self.update_live();
     }
 
-    fn clear_live_region(&mut self) {
-        if self.rendered_lines == 0 {
-            return;
-        }
-        let mut stderr = std::io::stderr();
-        let _ = execute!(
-            stderr,
-            cursor::MoveUp(self.rendered_lines as u16),
-            terminal::Clear(terminal::ClearType::FromCursorDown),
-        );
-        self.rendered_lines = 0;
+    /// Set the verbose detail line (e.g. raw command args).
+    pub fn set_verbose_line(&mut self, line: String) {
+        self.verbose_line = Some(line);
+        self.update_live();
     }
 
-    fn render_live_region(&mut self) {
-        let mut stderr = std::io::stderr();
-        let width = terminal::size().map(|(w, _)| w as usize).unwrap_or(120);
-
-        // Collect all output lines first
-        let mut output_lines: Vec<String> = Vec::new();
-
-        for span in self.spans.values() {
-            if span.toplevel {
-                for step in &span.steps {
-                    collect_step_lines(&mut output_lines, step, "", self.verbose);
-                }
-            } else {
-                output_lines.push(format!("{:>10} {}", span.verb.bright_green(), span.desc));
-                for step in &span.steps {
-                    collect_step_lines(&mut output_lines, step, "    ", self.verbose);
-                }
-            }
-        }
-
-        // Write lines, counting physical lines (accounting for wrapping)
-        let mut physical_lines = 0;
-        for line in &output_lines {
-            // Strip ANSI to get display width (respects CJK double-width)
-            let display_len = UnicodeWidthStr::width(strip_ansi_codes(line).as_str());
-            let phys = if width > 0 && display_len > width {
-                (display_len + width - 1) / width
-            } else {
-                1
-            };
-            let _ = writeln!(stderr, "{line}");
-            physical_lines += phys;
-        }
-
-        self.rendered_lines = physical_lines;
+    pub fn is_verbose(&self) -> bool {
+        self.verbose
     }
 
-    /// Non-TTY: print events linearly as they arrive, no cursor manipulation.
-    fn handle_event_linear(&mut self, event: ProgressEvent) {
-        let mut stderr = std::io::stderr();
-        match event {
-            ProgressEvent::SpanEnter { verb, desc, .. } => {
-                let _ = write!(stderr, "{:>10}", verb);
-                let _ = writeln!(stderr, " {desc}");
+    /// Update the live zone display with the current step state.
+    fn update_live(&self) {
+        let lines = self.format_lines(true);
+        self.console.set_live_lines(lines);
+    }
+
+    /// Format the step into display lines.
+    /// If `include_tail` is true, show tail lines for in-progress steps.
+    fn format_lines(&self, include_tail: bool) -> Vec<String> {
+        let mut lines = Vec::new();
+
+        let (icon, verb_fmt, desc_fmt) = self.format_header();
+        lines.push(format!("{}{} {} {}", self.prefix, icon, verb_fmt, desc_fmt));
+
+        // Verbose line
+        if self.verbose {
+            if let Some(ref vl) = self.verbose_line {
+                lines.push(format!("{}    {}", self.prefix, vl.bright_black()));
             }
-            ProgressEvent::Step { verb, desc, .. } => {
-                let _ = writeln!(stderr, "  {verb:>10} {desc}");
+        }
+
+        // Summary (completed only)
+        if let StepState::Completed(Some(ref summary)) = self.state {
+            lines.push(format!("{}    {}", self.prefix, summary.bright_black()));
+        }
+
+        // Failed: dump all captured output
+        if matches!(self.state, StepState::Failed) {
+            for line in &self.all_lines {
+                lines.push(format!("{}    {}", self.prefix, line.red()));
             }
-            ProgressEvent::StepDone { summary, .. } => {
-                if let Some(s) = summary {
-                    let _ = writeln!(stderr, "  -> {s}");
-                }
+        }
+
+        // Tail lines (in-progress only)
+        if include_tail && matches!(self.state, StepState::InProgress) {
+            for line in &self.tail {
+                lines.push(format!("{}    {}", self.prefix, line.bright_black()));
             }
-            ProgressEvent::StepFailed { .. } => {}
-            ProgressEvent::TailLine { .. } => {} // skip tail in non-TTY
-            ProgressEvent::Verbose { line, .. } => {
-                if self.verbose {
-                    let _ = writeln!(stderr, "    {line}");
-                }
-            }
-            ProgressEvent::Log { verb, desc } => {
-                let _ = writeln!(stderr, "{verb:>10} {desc}");
-            }
-            ProgressEvent::SpanExit { .. } => {}
+        }
+
+        lines
+    }
+
+    fn format_header(&self) -> (String, String, String) {
+        match &self.state {
+            StepState::InProgress => (
+                "◆".bright_yellow().to_string(),
+                format!("{:>10}", self.verb).bright_green().to_string(),
+                self.desc.clone(),
+            ),
+            StepState::Completed(_) => (
+                "✓".green().to_string(),
+                format!("{:>10}", self.verb).bright_green().to_string(),
+                self.desc.clone(),
+            ),
+            StepState::Failed => (
+                "✗".red().to_string(),
+                format!("{:>10}", self.verb).red().to_string(),
+                self.desc.red().to_string(),
+            ),
         }
     }
 }
 
-/// Collect rendered lines for a step into the output buffer.
-fn collect_step_lines(out: &mut Vec<String>, step: &StepState, indent: &str, verbose: bool) {
-    // Icon + verb + desc (no summary on this line)
-    if step.failed {
-        out.push(format!("{indent}{} {} {}",
-            "✗".red(),
-            format!("{:>10}", step.verb).red(),
-            step.desc.red()));
-    } else if step.completed {
-        out.push(format!("{indent}{} {} {}",
-            "✓".green(),
-            format!("{:>10}", step.verb).bright_green(),
-            step.desc));
-    } else {
-        // Active / in-progress
-        out.push(format!("{indent}{} {} {}",
-            "◆".bright_yellow(),
-            format!("{:>10}", step.verb).bright_green(),
-            step.desc));
-    }
+impl Drop for LogStep {
+    fn drop(&mut self) {
+        // Clear live lines
+        self.console.set_live_lines(vec![]);
 
-    // Verbose: raw command args
-    if verbose {
-        if let Some(ref vl) = step.verbose_line {
-            out.push(format!("{indent}    {}", vl.bright_black()));
-        }
+        // Write final formatted output to committed zone
+        let lines = self.format_lines(false);
+        let text = lines.join("\n");
+        self.console.write_line(&text);
+        // self.console is dropped next, committing to parent
     }
-
-    // Summary: shown below verbose line (or below step line if !verbose), in gray
-    if step.completed {
-        if let Some(ref summary) = step.summary {
-            out.push(format!("{indent}    {}", summary.bright_black()));
-        }
-    }
-
-    // Failed: dump all output in red
-    if step.failed {
-        for line in &step.all_lines {
-            out.push(format!("{indent}    {}", line.red()));
-        }
-    }
-
-    // Active: show tail lines
-    if !step.completed && !step.failed {
-        for tail_line in &step.tail {
-            out.push(format!("{indent}    {}", tail_line.bright_black()));
-        }
-    }
-}
-
-/// Strip ANSI escape codes from a string.
-fn strip_ansi_codes(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut in_escape = false;
-    for c in s.chars() {
-        if in_escape {
-            if c.is_ascii_alphabetic() {
-                in_escape = false;
-            }
-        } else if c == '\x1b' {
-            in_escape = true;
-        } else {
-            result.push(c);
-        }
-    }
-    result
 }

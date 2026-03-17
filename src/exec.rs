@@ -7,23 +7,25 @@ use tokio::{
 
 use miette::{ensure, IntoDiagnostic, Result, WrapErr};
 
-use crate::progress::Logger;
+use crate::progress::LogStep;
 
-pub async fn spawn<S: AsRef<str> + Debug>(
-    logger: &Logger,
-    verb: &str,
-    desc: &str,
+// --- Low-level functions (take &mut LogStep) ---
+
+pub async fn run_spawn<S: AsRef<str> + Debug>(
+    step: &mut LogStep,
     args: &[S],
 ) -> Result<Child> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
-    logger.log_exec(verb, desc, args);
+    if step.is_verbose() {
+        step.set_verbose_line(format!("{args:?}"));
+    }
 
     let command = args[0].as_ref();
-    let args = &args[1..];
+    let cmd_args = &args[1..];
 
     match Command::new(command)
-        .args(args.iter().map(|s| s.as_ref()))
+        .args(cmd_args.iter().map(|s| s.as_ref()))
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -33,27 +35,27 @@ pub async fn spawn<S: AsRef<str> + Debug>(
     {
         Ok(child) => Ok(child),
         Err(e) => {
-            logger.step_failed();
+            step.set_failed();
             Err(e)
         }
     }
 }
 
-pub async fn exec<S: AsRef<str> + Debug>(
-    logger: &Logger,
-    verb: &str,
-    desc: &str,
+pub async fn run<S: AsRef<str> + Debug>(
+    step: &mut LogStep,
     args: &[S],
 ) -> Result<()> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
-    logger.log_exec(verb, desc, args);
+    if step.is_verbose() {
+        step.set_verbose_line(format!("{args:?}"));
+    }
 
     let command = args[0].as_ref();
-    let args = &args[1..];
+    let cmd_args = &args[1..];
 
     let status = match Command::new(command)
-        .args(args.iter().map(|s| s.as_ref()))
+        .args(cmd_args.iter().map(|s| s.as_ref()))
         .status()
         .await
         .into_diagnostic()
@@ -61,38 +63,38 @@ pub async fn exec<S: AsRef<str> + Debug>(
     {
         Ok(s) => s,
         Err(e) => {
-            logger.step_failed();
+            step.set_failed();
             return Err(e);
         }
     };
 
     if status.success() {
-        logger.step_done(None);
+        step.set_completed(None);
     } else {
-        logger.step_failed();
+        step.set_failed();
     }
 
-    ensure!(status.success(), "Command returned non-successful status",);
+    ensure!(status.success(), "Command returned non-successful status");
 
     reset_terminal().await
 }
 
-pub async fn with_stdin<S: AsRef<str> + Debug>(
-    logger: &Logger,
-    verb: &str,
-    desc: &str,
+pub async fn run_with_stdin<S: AsRef<str> + Debug>(
+    step: &mut LogStep,
     args: &[S],
     stdin: Stdio,
 ) -> Result<()> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
-    logger.log_exec(verb, desc, args);
+    if step.is_verbose() {
+        step.set_verbose_line(format!("{args:?}"));
+    }
 
     let command = args[0].as_ref();
-    let args = &args[1..];
+    let cmd_args = &args[1..];
 
     let status = match Command::new(command)
-        .args(args.iter().map(|s| s.as_ref()))
+        .args(cmd_args.iter().map(|s| s.as_ref()))
         .stdin(stdin)
         .status()
         .await
@@ -101,15 +103,15 @@ pub async fn with_stdin<S: AsRef<str> + Debug>(
     {
         Ok(s) => s,
         Err(e) => {
-            logger.step_failed();
+            step.set_failed();
             return Err(e);
         }
     };
 
     if status.success() {
-        logger.step_done(None);
+        step.set_completed(None);
     } else {
-        logger.step_failed();
+        step.set_failed();
     }
 
     ensure!(status.success(), "Command returned non-successful status");
@@ -117,29 +119,29 @@ pub async fn with_stdin<S: AsRef<str> + Debug>(
     Ok(())
 }
 
-pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(
-    logger: &Logger,
-    verb: &str,
-    desc: &str,
+pub async fn run_with_bytes_stdin<S: AsRef<str> + Debug>(
+    step: &mut LogStep,
     args: &[S],
     bytes: &[u8],
 ) -> Result<()> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
-    logger.log_exec(verb, desc, args);
+    if step.is_verbose() {
+        step.set_verbose_line(format!("{args:?}"));
+    }
 
     let command = args[0].as_ref();
-    let args = &args[1..];
+    let cmd_args = &args[1..];
 
     let mut child = match Command::new(command)
-        .args(args.iter().map(|s| s.as_ref()))
+        .args(cmd_args.iter().map(|s| s.as_ref()))
         .stdin(Stdio::piped())
         .spawn()
         .into_diagnostic()
     {
         Ok(c) => c,
         Err(e) => {
-            logger.step_failed();
+            step.set_failed();
             return Err(e);
         }
     };
@@ -152,7 +154,7 @@ pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(
         .into_diagnostic()
         .wrap_err("failed to write to child stdin")
     {
-        logger.step_failed();
+        step.set_failed();
         return Err(e);
     }
     let status = match child
@@ -163,15 +165,15 @@ pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(
     {
         Ok(s) => s,
         Err(e) => {
-            logger.step_failed();
+            step.set_failed();
             return Err(e);
         }
     };
 
     if status.success() {
-        logger.step_done(None);
+        step.set_completed(None);
     } else {
-        logger.step_failed();
+        step.set_failed();
     }
 
     ensure!(status.success(), "Command returned non-successful status");
@@ -179,21 +181,21 @@ pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(
     Ok(())
 }
 
-pub async fn capturing_stdout<S: AsRef<str> + Debug>(
-    logger: &Logger,
-    verb: &str,
-    desc: &str,
+pub async fn run_capturing_stdout<S: AsRef<str> + Debug>(
+    step: &mut LogStep,
     args: &[S],
 ) -> Result<String> {
     ensure!(!args.is_empty(), "no command provided to exec");
 
-    logger.log_exec(verb, desc, args);
+    if step.is_verbose() {
+        step.set_verbose_line(format!("{args:?}"));
+    }
 
     let command = args[0].as_ref();
-    let args = &args[1..];
+    let cmd_args = &args[1..];
 
     let out = match Command::new(command)
-        .args(args.iter().map(|s| s.as_ref()))
+        .args(cmd_args.iter().map(|s| s.as_ref()))
         .output()
         .await
         .into_diagnostic()
@@ -201,7 +203,7 @@ pub async fn capturing_stdout<S: AsRef<str> + Debug>(
     {
         Ok(o) => o,
         Err(e) => {
-            logger.step_failed();
+            step.set_failed();
             return Err(e);
         }
     };
@@ -209,9 +211,9 @@ pub async fn capturing_stdout<S: AsRef<str> + Debug>(
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
 
     if out.status.success() {
-        logger.step_done(None);
+        step.set_completed(None);
     } else {
-        logger.step_failed();
+        step.set_failed();
     }
 
     ensure!(
@@ -228,12 +230,10 @@ pub struct ExecOutput {
     pub stderr: String,
 }
 
-pub async fn capturing<S: AsRef<str> + Debug>(
-    logger: &Logger,
-    verb: &str,
-    desc: &str,
+pub async fn run_capturing<S: AsRef<str> + Debug>(
+    step: &mut LogStep,
     args: &[S],
-) -> Result<ExecOutput, ExecOutput> {
+) -> std::result::Result<ExecOutput, ExecOutput> {
     if args.is_empty() {
         return Err(ExecOutput {
             stdout: String::new(),
@@ -241,19 +241,21 @@ pub async fn capturing<S: AsRef<str> + Debug>(
         });
     }
 
-    logger.log_exec(verb, desc, args);
+    if step.is_verbose() {
+        step.set_verbose_line(format!("{args:?}"));
+    }
 
     let command = args[0].as_ref();
-    let args = &args[1..];
+    let cmd_args = &args[1..];
 
     let out = match Command::new(command)
-        .args(args.iter().map(|s| s.as_ref()))
+        .args(cmd_args.iter().map(|s| s.as_ref()))
         .output()
         .await
     {
         Ok(output) => output,
         Err(e) => {
-            logger.step_failed();
+            step.set_failed();
             return Err(ExecOutput {
                 stdout: String::new(),
                 stderr: format!("exec failed: {e}"),
@@ -265,9 +267,9 @@ pub async fn capturing<S: AsRef<str> + Debug>(
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
 
     if out.status.success() {
-        logger.step_done(None);
+        step.set_completed(None);
     } else {
-        logger.step_failed();
+        step.set_failed();
     }
 
     let output = ExecOutput { stdout, stderr };
@@ -280,15 +282,15 @@ pub async fn capturing<S: AsRef<str> + Debug>(
 }
 
 /// Execute a command with live tail display of stdout/stderr.
-pub async fn exec_with_tail<S: AsRef<str> + Debug>(
-    logger: &Logger,
-    verb: &str,
-    desc: &str,
+pub async fn run_with_tail<S: AsRef<str> + Debug>(
+    step: &mut LogStep,
     args: &[S],
 ) -> Result<()> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
-    logger.log_exec(verb, desc, args);
+    if step.is_verbose() {
+        step.set_verbose_line(format!("{args:?}"));
+    }
 
     let command = args[0].as_ref();
     let cmd_args = &args[1..];
@@ -304,7 +306,7 @@ pub async fn exec_with_tail<S: AsRef<str> + Debug>(
     {
         Ok(c) => c,
         Err(e) => {
-            logger.step_failed();
+            step.set_failed();
             return Err(e);
         }
     };
@@ -319,10 +321,10 @@ pub async fn exec_with_tail<S: AsRef<str> + Debug>(
         tokio::select! {
             line = stdout_reader.next_line() => {
                 match line.into_diagnostic()? {
-                    Some(line) => logger.tail_line(line),
+                    Some(line) => step.tail_line(line),
                     None => {
                         while let Some(line) = stderr_reader.next_line().await.into_diagnostic()? {
-                            logger.tail_line(line);
+                            step.tail_line(line);
                         }
                         break;
                     }
@@ -330,10 +332,10 @@ pub async fn exec_with_tail<S: AsRef<str> + Debug>(
             }
             line = stderr_reader.next_line() => {
                 match line.into_diagnostic()? {
-                    Some(line) => logger.tail_line(line),
+                    Some(line) => step.tail_line(line),
                     None => {
                         while let Some(line) = stdout_reader.next_line().await.into_diagnostic()? {
-                            logger.tail_line(line);
+                            step.tail_line(line);
                         }
                         break;
                     }
@@ -345,10 +347,10 @@ pub async fn exec_with_tail<S: AsRef<str> + Debug>(
     let status = child.wait().await.into_diagnostic()?;
 
     if status.success() {
-        logger.step_done(None);
+        step.set_completed(None);
         Ok(())
     } else {
-        logger.step_failed();
+        step.set_failed();
         miette::bail!("Command returned non-successful status");
     }
 }

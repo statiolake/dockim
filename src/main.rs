@@ -21,12 +21,12 @@ async fn main() -> Result<()> {
     let mut join_set = JoinSet::new();
 
     let result = match &args.subcommand {
-        Subcommand::Init(init_args) => init::main(&config, &args, init_args).await,
+        Subcommand::Init(init_args) => init::main(&logger, &config, &args, init_args).await,
         Subcommand::InitConfig(init_config_args) => {
-            init_config::main(&config, &args, init_config_args).await
+            init_config::main(&logger, &config, &args, init_config_args).await
         }
         Subcommand::InitDocker(init_docker_args) => {
-            init_docker::main(&config, &args, init_docker_args).await
+            init_docker::main(&logger, &config, &args, init_docker_args).await
         }
         Subcommand::Up(up_args) => up::main(&logger, &config, &args, up_args).await,
         Subcommand::Build(build_args) => build::main(&logger, &config, &args, build_args).await,
@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
             port::main(&logger, &config, &args, port_args, &mut join_set).await
         }
         Subcommand::Ps(ps_args) => ps::main(&logger, &config, &args, ps_args).await,
-        Subcommand::Ls(ls_args) => ls::main(&config, &args, ls_args).await,
+        Subcommand::Ls(ls_args) => ls::main(&logger, &config, &args, ls_args).await,
         Subcommand::Stop(stop_args) => stop::main(&logger, &config, &args, stop_args).await,
         Subcommand::Down(down_args) => down::main(&logger, &config, &args, down_args).await,
         Subcommand::ClipboardServer(clipboard_server_args) => {
@@ -59,44 +59,36 @@ async fn main() -> Result<()> {
 }
 
 async fn check_requirements(logger: &dockim::progress::Logger) -> Result<()> {
-    let dc_version = exec::capturing_stdout(
-        logger,
-        "Checking",
-        "devcontainer CLI",
-        &["devcontainer", "--version"],
-    )
-    .await;
-    match dc_version {
-        Ok(v) => {
-            logger.step_done(Some(format!("devcontainer CLI version {}", v.trim())));
-        }
-        Err(_) => {
-            bail!(
-                help = concat!(
-                    "run `npm install -g @devcontainers/cli` to install it\n",
-                    "see also: https://github.com/devcontainers/cli",
-                ),
-                "devcontainer CLI is not installed",
-            );
+    {
+        let mut step = logger.step("Checking", "devcontainer CLI");
+        match exec::run_capturing_stdout(&mut step, &["devcontainer", "--version"]).await {
+            Ok(v) => {
+                step.set_completed(Some(format!("devcontainer CLI version {}", v.trim())));
+            }
+            Err(_) => {
+                bail!(
+                    help = concat!(
+                        "run `npm install -g @devcontainers/cli` to install it\n",
+                        "see also: https://github.com/devcontainers/cli",
+                    ),
+                    "devcontainer CLI is not installed",
+                );
+            }
         }
     }
 
-    let docker_version = exec::capturing_stdout(
-        logger,
-        "Checking",
-        "Docker",
-        &["docker", "--version"],
-    )
-    .await;
-    match docker_version {
-        Ok(v) => {
-            logger.step_done(Some(v.trim().to_string()));
-        }
-        Err(_) => {
-            bail!(
-                help = "install or start Docker Desktop first",
-                "Docker is not installed or not running",
-            );
+    {
+        let mut step = logger.step("Checking", "Docker");
+        match exec::run_capturing_stdout(&mut step, &["docker", "--version"]).await {
+            Ok(v) => {
+                step.set_completed(Some(v.trim().to_string()));
+            }
+            Err(_) => {
+                bail!(
+                    help = "install or start Docker Desktop first",
+                    "Docker is not installed or not running",
+                );
+            }
         }
     }
 

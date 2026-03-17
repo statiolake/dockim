@@ -1,9 +1,12 @@
 use miette::{miette, IntoDiagnostic, Result};
 use std::{fs, path::Path};
 
-use crate::cli::{Args, InitConfigArgs};
+use crate::{cli::Args, progress::Logger};
+
+use super::InitConfigArgs;
 
 pub async fn main(
+    logger: &Logger,
     _config: &crate::config::Config,
     _args: &Args,
     _init_config_args: &InitConfigArgs,
@@ -23,8 +26,8 @@ pub async fn main(
 
     create_config_template(&config_dir, &config_path)?;
 
-    println!("Created default config file at: {}", config_path.display());
-    println!("Edit this file to customize your dockim settings.");
+    logger.write(&format!("Created default config file at: {}", config_path.display()));
+    logger.write("Edit this file to customize your dockim settings.");
 
     Ok(())
 }

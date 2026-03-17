@@ -1,9 +1,12 @@
 use miette::{miette, IntoDiagnostic, Result};
 use std::{fs, path::Path};
 
-use crate::cli::{Args, InitArgs};
+use crate::{cli::Args, progress::Logger};
+
+use super::InitArgs;
 
 pub async fn main(
+    logger: &Logger,
     _config: &crate::config::Config,
     args: &Args,
     _init_args: &InitArgs,
@@ -24,11 +27,11 @@ pub async fn main(
 
     create_devcontainer_template(&devcontainer_dir)?;
 
-    println!(
+    logger.write(&format!(
         "Created Dev Container configuration at {}",
         devcontainer_dir.display()
-    );
-    println!("You can now run 'dockim up' to start the container.");
+    ));
+    logger.write("You can now run 'dockim up' to start the container.");
 
     Ok(())
 }

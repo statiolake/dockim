@@ -23,7 +23,7 @@ pub async fn main(
     let _server = ClipboardServer::start(clipboard_port, join_set).await?;
 
     logger.log("Started", &format!("clipboard server on port {}", clipboard_port));
-    println!("Press Ctrl+C to stop");
+    logger.write("Press Ctrl+C to stop");
 
     signal::ctrl_c().await.into_diagnostic()?;
 

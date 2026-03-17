@@ -16,7 +16,6 @@ use crate::{
     clipboard::ClipboardServer,
     config::Config,
     devcontainer::{DevContainer, RootMode},
-    exec,
     log::OutputSuppressGuard,
     port_forwarder::PortForwarder,
     progress::Logger,
@@ -88,7 +87,7 @@ pub async fn main(
         (Some(host_port.clone()), Some(cp))
     } else {
         let auto_host_port = dc.find_available_host_port().await?;
-        println!("Auto-selected host port: {auto_host_port}");
+        logger.write(&format!("Auto-selected host port: {auto_host_port}"));
         (Some(auto_host_port.to_string()), Some("54321".to_string()))
     };
 
@@ -134,7 +133,7 @@ async fn populate_envs(
     let platform_env = if cfg!(target_os = "macos") {
         "DOCKIM_ON_MACOS"
     } else if cfg!(target_os = "windows")
-        || exec::capturing_stdout(logger, "Checking", "host platform", &["uname", "-a"])
+        || logger.capturing_stdout("Checking", "host platform", &["uname", "-a"])
             .await
             .is_ok_and(|s| s.contains("Microsoft"))
     {
@@ -278,7 +277,7 @@ async fn run_neovim_client(logger: &Logger, config: &Config, args: &[String], mi
 }
 
 async fn run_background_neovim_client(logger: &Logger, args: &[String]) -> Result<()> {
-    let mut child = exec::spawn(logger, "Launching", "Neovim client (background)", args).await?;
+    let mut child = logger.spawn("Launching", "Neovim client (background)", args).await?;
     // wait for minimum duration and check if the child process is still running
     time::sleep(Duration::from_millis(500)).await;
     match child.try_wait().into_diagnostic() {
@@ -292,7 +291,7 @@ async fn run_foreground_neovim_client(logger: &Logger, args: &[String], min_dura
     let start = Instant::now();
     let output = {
         let _suppress = OutputSuppressGuard::new();
-        exec::exec(logger, "Launching", "Neovim client", args).await
+        logger.exec("Launching", "Neovim client", args).await
     };
     let elapsed = start.elapsed();
 

@@ -2,9 +2,12 @@ use miette::{IntoDiagnostic, Result};
 use serde_json::{json, Value};
 use std::{fs, path::Path};
 
-use crate::cli::{Args, InitDockerArgs};
+use crate::{cli::Args, progress::Logger};
+
+use super::InitDockerArgs;
 
 pub async fn main(
+    logger: &Logger,
     _config: &crate::config::Config,
     _args: &Args,
     _init_docker_args: &InitDockerArgs,
@@ -14,8 +17,8 @@ pub async fn main(
     create_docker_config_dir(&docker_config_dir)?;
     update_docker_config(&docker_config_dir)?;
 
-    println!("Docker configuration updated to enable Ctrl+P support");
-    println!("Docker config location: {}", docker_config_dir.display());
+    logger.write("Docker configuration updated to enable Ctrl+P support");
+    logger.write(&format!("Docker config location: {}", docker_config_dir.display()));
 
     Ok(())
 }

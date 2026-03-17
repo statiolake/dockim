@@ -1,19 +1,19 @@
 use miette::Result;
 
-use crate::config::Config;
+use crate::{config::Config, progress::Logger};
 
 use super::{Args, LsArgs};
 
-pub async fn main(_config: &Config, args: &Args, _ls_args: &LsArgs) -> Result<()> {
+pub async fn main(logger: &Logger, _config: &Config, args: &Args, _ls_args: &LsArgs) -> Result<()> {
     let workspace_folder = args.resolve_workspace_folder()?;
     let configs = args.discover_devcontainer_configs()?;
 
-    println!("Available dev container configurations in:");
-    println!("  Workspace: {}", workspace_folder.display());
-    println!();
+    logger.write("Available dev container configurations in:");
+    logger.write(&format!("  Workspace: {}", workspace_folder.display()));
+    logger.write("");
 
     if configs.is_empty() {
-        println!("  No configurations found");
+        logger.write("  No configurations found");
         return Ok(());
     }
 
@@ -32,7 +32,7 @@ pub async fn main(_config: &Config, args: &Args, _ls_args: &LsArgs) -> Result<()
 
         let table = builder.build().with(Style::modern()).to_string();
         for line in table.lines() {
-            println!("  {line}");
+            logger.write(&format!("  {line}"));
         }
     }
 
