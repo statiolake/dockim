@@ -5,7 +5,6 @@ use dockim::{
         neovim, port, ps, shell, stop, up, Args, Subcommand,
     },
     config::Config,
-    devcontainer::DevContainer,
     exec,
 };
 use miette::{bail, Result};
@@ -60,21 +59,45 @@ async fn main() -> Result<()> {
 }
 
 async fn check_requirements(logger: &dockim::progress::Logger) -> Result<()> {
-    if !DevContainer::is_cli_installed(logger).await {
-        bail!(
-            help = concat!(
-                "run `npm install -g @devcontainers/cli` to install it\n",
-                "see also: https://github.com/devcontainers/cli",
-            ),
-            "devcontainer CLI is not installed",
-        );
+    let dc_version = exec::capturing_stdout(
+        logger,
+        "Checking",
+        "devcontainer CLI",
+        &["devcontainer", "--version"],
+    )
+    .await;
+    match dc_version {
+        Ok(v) => {
+            logger.step_done(Some(format!("devcontainer CLI version {}", v.trim())));
+        }
+        Err(_) => {
+            bail!(
+                help = concat!(
+                    "run `npm install -g @devcontainers/cli` to install it\n",
+                    "see also: https://github.com/devcontainers/cli",
+                ),
+                "devcontainer CLI is not installed",
+            );
+        }
     }
 
-    if exec::capturing_stdout(logger, "Checking", "Docker version", &["docker", "--version"]).await.is_err() {
-        bail!(
-            help = "install or start Docker Desktop first",
-            "Docker is not installed or not running",
-        );
+    let docker_version = exec::capturing_stdout(
+        logger,
+        "Checking",
+        "Docker",
+        &["docker", "--version"],
+    )
+    .await;
+    match docker_version {
+        Ok(v) => {
+            logger.step_done(Some(v.trim().to_string()));
+        }
+        Err(_) => {
+            bail!(
+                help = "install or start Docker Desktop first",
+                "Docker is not installed or not running",
+            );
+        }
     }
 
     Ok(())

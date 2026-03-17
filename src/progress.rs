@@ -251,7 +251,6 @@ impl ProgressRenderer {
             while let Ok(event) = self.rx.try_recv() {
                 self.handle_event(event);
             }
-            self.auto_commit_finished_toplevel_spans();
             self.render();
         }
     }
@@ -261,6 +260,19 @@ impl ProgressRenderer {
             self.handle_event_linear(event);
             return;
         }
+
+        // Before starting a new operation, commit any finished toplevel spans.
+        // This gives callers time to call step_done() to override step_failed()
+        // between the exec return and the next operation.
+        match &event {
+            ProgressEvent::SpanEnter { .. }
+            | ProgressEvent::Step { .. }
+            | ProgressEvent::Log { .. } => {
+                self.auto_commit_finished_toplevel_spans();
+            }
+            _ => {}
+        }
+
         match event {
             ProgressEvent::SpanEnter { id, verb, desc } => {
                 self.spans.insert(

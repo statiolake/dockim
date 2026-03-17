@@ -209,12 +209,7 @@ pub async fn capturing_stdout<S: AsRef<str> + Debug>(
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
 
     if out.status.success() {
-        let summary = stdout
-            .lines()
-            .next()
-            .map(|l| l.trim().to_string())
-            .filter(|s| !s.is_empty());
-        logger.step_done(summary);
+        logger.step_done(None);
     } else {
         logger.step_failed();
     }
