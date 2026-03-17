@@ -11,6 +11,7 @@ use std::{
 use colored::Colorize;
 use crossterm::{cursor, execute, terminal};
 use tokio::sync::mpsc;
+use unicode_width::UnicodeWidthStr;
 
 const MAX_TAIL_LINES: usize = 5;
 
@@ -227,20 +228,17 @@ struct ProgressRenderer {
     rendered_lines: usize,
     is_tty: bool,
     verbose: bool,
-    term_width: u16,
 }
 
 impl ProgressRenderer {
     fn start(verbose: bool) -> ProgressHandle {
         let (tx, rx) = mpsc::unbounded_channel();
-        let term_width = terminal::size().map(|(w, _)| w).unwrap_or(120);
         let renderer = Self {
             rx,
             spans: BTreeMap::new(),
             rendered_lines: 0,
             is_tty: std::io::stderr().is_terminal(),
             verbose,
-            term_width,
         };
         tokio::spawn(renderer.run());
         ProgressHandle { tx }
@@ -465,7 +463,7 @@ impl ProgressRenderer {
 
     fn render_live_region(&mut self) {
         let mut stderr = std::io::stderr();
-        let width = self.term_width as usize;
+        let width = terminal::size().map(|(w, _)| w as usize).unwrap_or(120);
 
         // Collect all output lines first
         let mut output_lines: Vec<String> = Vec::new();
@@ -486,8 +484,8 @@ impl ProgressRenderer {
         // Write lines, counting physical lines (accounting for wrapping)
         let mut physical_lines = 0;
         for line in &output_lines {
-            // Strip ANSI to get display width
-            let display_len = strip_ansi_codes(line).len();
+            // Strip ANSI to get display width (respects CJK double-width)
+            let display_len = UnicodeWidthStr::width(strip_ansi_codes(line).as_str());
             let phys = if width > 0 && display_len > width {
                 (display_len + width - 1) / width
             } else {
@@ -583,7 +581,7 @@ fn collect_step_lines(out: &mut Vec<String>, step: &StepState, indent: &str, ver
     }
 }
 
-/// Strip ANSI escape codes to get the display width of a string.
+/// Strip ANSI escape codes from a string.
 fn strip_ansi_codes(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut in_escape = false;
