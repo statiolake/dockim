@@ -336,6 +336,7 @@ impl ProgressRenderer {
                 if let Some(span) = span {
                     if let Some(step) = span.steps.last_mut() {
                         step.completed = true;
+                        step.failed = false; // override failed if called after step_failed
                         step.summary = summary;
                         step.tail.clear();
                     }
@@ -531,26 +532,17 @@ impl ProgressRenderer {
 
 /// Collect rendered lines for a step into the output buffer.
 fn collect_step_lines(out: &mut Vec<String>, step: &StepState, indent: &str, verbose: bool) {
-    // Icon + verb + desc
+    // Icon + verb + desc (no summary on this line)
     if step.failed {
         out.push(format!("{indent}{} {} {}",
             "✗".red(),
             format!("{:>10}", step.verb).red(),
             step.desc.red()));
     } else if step.completed {
-        let summary_str = step.summary.as_deref().unwrap_or("");
-        if summary_str.is_empty() {
-            out.push(format!("{indent}{} {} {}",
-                "✓".green(),
-                format!("{:>10}", step.verb).bright_green(),
-                step.desc));
-        } else {
-            out.push(format!("{indent}{} {} {} {}",
-                "✓".green(),
-                format!("{:>10}", step.verb).bright_green(),
-                step.desc,
-                format!("({summary_str})").bright_black()));
-        }
+        out.push(format!("{indent}{} {} {}",
+            "✓".green(),
+            format!("{:>10}", step.verb).bright_green(),
+            step.desc));
     } else {
         // Active / in-progress
         out.push(format!("{indent}{} {} {}",
@@ -563,6 +555,13 @@ fn collect_step_lines(out: &mut Vec<String>, step: &StepState, indent: &str, ver
     if verbose {
         if let Some(ref vl) = step.verbose_line {
             out.push(format!("{indent}    {}", vl.bright_black()));
+        }
+    }
+
+    // Summary: shown below verbose line (or below step line if !verbose), in gray
+    if step.completed {
+        if let Some(ref summary) = step.summary {
+            out.push(format!("{indent}    {}", summary.bright_black()));
         }
     }
 

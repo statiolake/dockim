@@ -749,7 +749,8 @@ impl DevContainer {
 
     async fn enable_host_docker_internal_in_rancher_desktop_on_lima(&self, logger: &Logger) -> Result<()> {
         if exec::exec(logger, "Checking", "Rancher Desktop", &["rdctl", "version"]).await.is_err() {
-            // Not using Rancher Desktop, skipping
+            // Not using Rancher Desktop, mark as done (not an error) and skip
+            logger.step_done(Some("not installed, skipping".to_string()));
             return Ok(());
         }
 
