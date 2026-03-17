@@ -22,16 +22,21 @@ pub async fn spawn<S: AsRef<str> + Debug>(
     let command = args[0].as_ref();
     let args = &args[1..];
 
-    let child = Command::new(command)
+    match Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
         .into_diagnostic()
-        .wrap_err("spawn failed")?;
-
-    Ok(child)
+        .wrap_err("spawn failed")
+    {
+        Ok(child) => Ok(child),
+        Err(e) => {
+            logger.step_failed();
+            Err(e)
+        }
+    }
 }
 
 pub async fn exec<S: AsRef<str> + Debug>(
@@ -47,12 +52,19 @@ pub async fn exec<S: AsRef<str> + Debug>(
     let command = args[0].as_ref();
     let args = &args[1..];
 
-    let status = Command::new(command)
+    let status = match Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
         .status()
         .await
         .into_diagnostic()
-        .wrap_err("exec failed")?;
+        .wrap_err("exec failed")
+    {
+        Ok(s) => s,
+        Err(e) => {
+            logger.step_failed();
+            return Err(e);
+        }
+    };
 
     if status.success() {
         logger.step_done(None);
@@ -79,13 +91,20 @@ pub async fn with_stdin<S: AsRef<str> + Debug>(
     let command = args[0].as_ref();
     let args = &args[1..];
 
-    let status = Command::new(command)
+    let status = match Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
         .stdin(stdin)
         .status()
         .await
         .into_diagnostic()
-        .wrap_err("exec failed")?;
+        .wrap_err("exec failed")
+    {
+        Ok(s) => s,
+        Err(e) => {
+            logger.step_failed();
+            return Err(e);
+        }
+    };
 
     if status.success() {
         logger.step_done(None);
@@ -112,24 +131,42 @@ pub async fn with_bytes_stdin<S: AsRef<str> + Debug>(
     let command = args[0].as_ref();
     let args = &args[1..];
 
-    let mut child = Command::new(command)
+    let mut child = match Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
         .stdin(Stdio::piped())
         .spawn()
-        .into_diagnostic()?;
-    child
+        .into_diagnostic()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            logger.step_failed();
+            return Err(e);
+        }
+    };
+    if let Err(e) = child
         .stdin
         .take()
         .unwrap()
         .write_all(bytes)
         .await
         .into_diagnostic()
-        .wrap_err("failed to write to child stdin")?;
-    let status = child
+        .wrap_err("failed to write to child stdin")
+    {
+        logger.step_failed();
+        return Err(e);
+    }
+    let status = match child
         .wait()
         .await
         .into_diagnostic()
-        .wrap_err("failed to wait child process to finish")?;
+        .wrap_err("failed to wait child process to finish")
+    {
+        Ok(s) => s,
+        Err(e) => {
+            logger.step_failed();
+            return Err(e);
+        }
+    };
 
     if status.success() {
         logger.step_done(None);
@@ -155,12 +192,19 @@ pub async fn capturing_stdout<S: AsRef<str> + Debug>(
     let command = args[0].as_ref();
     let args = &args[1..];
 
-    let out = Command::new(command)
+    let out = match Command::new(command)
         .args(args.iter().map(|s| s.as_ref()))
         .output()
         .await
         .into_diagnostic()
-        .wrap_err("exec failed")?;
+        .wrap_err("exec failed")
+    {
+        Ok(o) => o,
+        Err(e) => {
+            logger.step_failed();
+            return Err(e);
+        }
+    };
 
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
 
@@ -214,6 +258,7 @@ pub async fn capturing<S: AsRef<str> + Debug>(
     {
         Ok(output) => output,
         Err(e) => {
+            logger.step_failed();
             return Err(ExecOutput {
                 stdout: String::new(),
                 stderr: format!("exec failed: {e}"),
@@ -253,14 +298,21 @@ pub async fn exec_with_tail<S: AsRef<str> + Debug>(
     let command = args[0].as_ref();
     let cmd_args = &args[1..];
 
-    let mut child = Command::new(command)
+    let mut child = match Command::new(command)
         .args(cmd_args.iter().map(|s| s.as_ref()))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .into_diagnostic()
-        .wrap_err("exec failed")?;
+        .wrap_err("exec failed")
+    {
+        Ok(c) => c,
+        Err(e) => {
+            logger.step_failed();
+            return Err(e);
+        }
+    };
 
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();

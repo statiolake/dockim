@@ -83,6 +83,8 @@ pub async fn main(logger: &Logger, config: &Config, args: &Args, build_args: &Bu
         install_dotfiles(&span, &config, &dc).await?;
     }
 
+    logger.log("Finished", "build completed successfully");
+
     Ok(())
 }
 
