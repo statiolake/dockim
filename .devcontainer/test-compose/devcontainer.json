@@ -1,0 +1,16 @@
+{
+    "name": "Test: Docker Compose",
+    "dockerComposeFile": [
+        "compose.yml",
+        "compose.override.yml"
+    ],
+    "service": "app",
+    "workspaceFolder": "/workspace",
+    "remoteUser": "vscode",
+    "postCreateCommand": "echo 'Test compose container ready!'",
+    "customizations": {
+        "vscode": {
+            "extensions": []
+        }
+    }
+}

@@ -1,0 +1,9 @@
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: .devcontainer/test-compose/Dockerfile
+    volumes:
+      - ../..:/workspace:cached
+    working_dir: /workspace
+    command: sleep infinity

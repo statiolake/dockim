@@ -1,0 +1,11 @@
+# compose override example
+# devcontainer.json の dockerComposeFile で !reset / !override を試す場合:
+#
+#   "dockerComposeFile": ["!reset", "compose.yml"]          // 配列をリセットして再定義
+#   "dockerComposeFile": ["!override", "compose.override.yml"] // 既存配列に上書きマージ
+#
+# このファイルはデフォルトで読み込まれる override として機能する
+services:
+  app:
+    environment:
+      TEST_OVERRIDE: "true"

@@ -1,0 +1,15 @@
+{
+    "name": "Test: Dockerfile",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": "../.."
+    },
+    "workspaceFolder": "/workspace",
+    "remoteUser": "vscode",
+    "postCreateCommand": "echo 'Test dockerfile container ready!'",
+    "customizations": {
+        "vscode": {
+            "extensions": []
+        }
+    }
+}
