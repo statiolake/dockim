@@ -16,7 +16,7 @@ use crate::{
     clipboard::ClipboardServer,
     config::Config,
     devcontainer::{DevContainer, RootMode},
-    log::OutputSuppressGuard,
+    console::SuppressGuard,
     port_forwarder::PortForwarder,
     progress::Logger,
 };
@@ -178,7 +178,7 @@ async fn run_neovim_directly(
     let mut args = format_envs_to_invocation(&envs);
     args.push("TERM=screen-256color".to_string());
     args.push("nvim".to_string());
-    let _suppress = OutputSuppressGuard::new();
+    let _suppress = SuppressGuard::new();
     dc.exec(logger, "Launching", "Neovim", &args, RootMode::No).await
 }
 
@@ -290,7 +290,7 @@ async fn run_background_neovim_client(logger: &Logger<'_>, args: &[String]) -> R
 async fn run_foreground_neovim_client(logger: &Logger<'_>, args: &[String], min_duration: Duration) -> Result<()> {
     let start = Instant::now();
     let output = {
-        let _suppress = OutputSuppressGuard::new();
+        let _suppress = SuppressGuard::new();
         logger.exec("Launching", "Neovim client", args).await
     };
     let elapsed = start.elapsed();

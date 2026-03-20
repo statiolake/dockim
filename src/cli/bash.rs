@@ -1,6 +1,7 @@
 use crate::{
     cli::{Args, BashArgs},
     config::Config,
+    console::SuppressGuard,
     devcontainer::{DevContainer, RootMode},
     progress::Logger,
 };
@@ -18,6 +19,7 @@ pub async fn main(logger: &Logger<'_>, _config: &Config, args: &Args, shell_args
 
     let mut args = vec!["bash"];
     args.extend(shell_args.args.iter().map(|s| s.as_str()));
+    let _suppress = SuppressGuard::new();
     dc.exec(logger, "Running", "bash", &args, RootMode::No).await.wrap_err_with(|| {
         miette!(
             help = "try `dockim build --rebuild` first",

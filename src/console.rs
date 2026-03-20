@@ -1,11 +1,37 @@
 use std::{
     collections::HashMap,
     io::{IsTerminal, Write},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Instant,
 };
 
-use crate::log;
+static SUPPRESSED: AtomicBool = AtomicBool::new(false);
+
+/// RAII guard that suppresses all Console output while alive.
+///
+/// Use this when handing the terminal to an interactive child process
+/// (shell, exec, neovim, …) so background tasks don't corrupt its display.
+pub struct SuppressGuard;
+
+impl SuppressGuard {
+    pub fn new() -> Self {
+        SUPPRESSED.store(true, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for SuppressGuard {
+    fn drop(&mut self) {
+        SUPPRESSED.store(false, Ordering::Relaxed);
+    }
+}
+
+fn is_suppressed() -> bool {
+    SUPPRESSED.load(Ordering::Relaxed)
+}
 
 use crossterm::{cursor, execute, terminal};
 use unicode_width::UnicodeWidthStr;
@@ -89,7 +115,7 @@ impl Console {
     /// Append text to committed zone. Indent is applied automatically.
     /// In non-TTY mode, also prints immediately to stderr.
     pub fn write_line(&self, text: &str) {
-        if text.is_empty() || log::is_suppressed() {
+        if text.is_empty() || is_suppressed() {
             return;
         }
 
@@ -166,7 +192,7 @@ impl Console {
     /// In non-TTY mode, prints on the first non-empty call only (so the header
     /// appears before any child output).
     pub fn set_live(&self, lines: Vec<String>) {
-        if log::is_suppressed() {
+        if is_suppressed() {
             return;
         }
         let mut state = self.state.lock().unwrap();

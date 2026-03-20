@@ -7,6 +7,7 @@ use crate::{
     auto_port_forward::AutoPortForwarder,
     cli::{Args, ExecArgs},
     config::Config,
+    console::SuppressGuard,
     devcontainer::{DevContainer, RootMode},
     port_forwarder::PortForwarder,
     progress::Logger,
@@ -34,6 +35,7 @@ pub async fn main(
     let _auto_forwarder =
         AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], logger, join_set);
 
+    let _suppress = SuppressGuard::new();
     dc.exec(logger, "Running", "command in container", &exec_args.args, RootMode::No)
         .await
         .wrap_err(miette!(

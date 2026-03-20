@@ -5,6 +5,5 @@ pub mod config;
 pub mod console;
 pub mod devcontainer;
 pub mod exec;
-pub mod log;
 pub mod port_forwarder;
 pub mod progress;

@@ -7,6 +7,7 @@ use crate::{
     auto_port_forward::AutoPortForwarder,
     cli::{Args, BuildArgs, ShellArgs},
     config::Config,
+    console::SuppressGuard,
     devcontainer::{DevContainer, RootMode},
     port_forwarder::PortForwarder,
     progress::Logger,
@@ -52,6 +53,7 @@ pub async fn main(
 
     let mut cmd_args = vec![&*config.shell];
     cmd_args.extend(shell_args.args.iter().map(|s| s.as_str()));
+    let _suppress = SuppressGuard::new();
     dc.exec(logger, "Running", "shell", &cmd_args, RootMode::No).await.wrap_err(miette!(
         help = "try `dockim build --rebuild` first",
         "failed to execute `{}` on the container",
