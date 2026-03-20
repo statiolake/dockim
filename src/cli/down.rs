@@ -7,7 +7,7 @@ use crate::{
     progress::Logger,
 };
 
-pub async fn main(logger: &Logger, _config: &Config, args: &Args, _down_args: &DownArgs) -> Result<()> {
+pub async fn main(logger: &Logger<'_>, _config: &Config, args: &Args, _down_args: &DownArgs) -> Result<()> {
     let dc = DevContainer::new(
         args.resolve_workspace_folder()?,
         args.resolve_config_path()?,

@@ -77,7 +77,7 @@ impl RootMode {
 }
 
 impl DevContainer {
-    pub async fn is_cli_installed(logger: &Logger) -> bool {
+    pub async fn is_cli_installed(logger: &Logger<'_>) -> bool {
         logger.capturing_stdout("Checking", "devcontainer CLI version", &[&*Self::devcontainer_command(), "--version"])
             .await
             .is_ok()
@@ -95,7 +95,7 @@ impl DevContainer {
         })
     }
 
-    pub async fn up(&self, logger: &Logger, rebuild: bool, build_no_cache: bool) -> Result<()> {
+    pub async fn up(&self, logger: &Logger<'_>, rebuild: bool, build_no_cache: bool) -> Result<()> {
         let mut args = self.make_args(RootMode::No, "up");
 
         if rebuild {
@@ -123,7 +123,7 @@ impl DevContainer {
     /// Inspect the running devcontainer without starting it.
     /// Uses devcontainer labels (devcontainer.local_folder / devcontainer.config_file)
     /// to find the container directly, avoiding compose project name mismatches.
-    pub async fn inspect(&self, logger: &Logger) -> Result<UpOutput> {
+    pub async fn inspect(&self, logger: &Logger<'_>) -> Result<UpOutput> {
         // Check cache first
         if let Some(cached) = self.cached_up_output.lock().await.as_ref() {
             return Ok(cached.clone());
@@ -226,7 +226,7 @@ impl DevContainer {
 
     async fn find_containers_by_filters(
         &self,
-        logger: &Logger,
+        logger: &Logger<'_>,
         filters: &[String],
         all: bool,
     ) -> Result<Vec<String>> {
@@ -250,7 +250,7 @@ impl DevContainer {
 
     async fn list_containers_by_filters(
         &self,
-        logger: &Logger,
+        logger: &Logger<'_>,
         filters: &[String],
     ) -> Result<Vec<ComposeContainerInfo>> {
         let mut args = vec!["docker".to_string(), "ps".to_string(), "-a".to_string()];
@@ -293,7 +293,7 @@ impl DevContainer {
             .collect())
     }
 
-    async fn list_containers_by_ids(&self, logger: &Logger, ids: &[String]) -> Result<Vec<ComposeContainerInfo>> {
+    async fn list_containers_by_ids(&self, logger: &Logger<'_>, ids: &[String]) -> Result<Vec<ComposeContainerInfo>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -338,7 +338,7 @@ impl DevContainer {
             .collect())
     }
 
-    async fn container_has_config_file_label(&self, logger: &Logger, container_id: &str) -> Result<bool> {
+    async fn container_has_config_file_label(&self, logger: &Logger<'_>, container_id: &str) -> Result<bool> {
         let output = logger.capturing_stdout("Inspecting", "container labels", &[
             "docker",
             "inspect",
@@ -354,13 +354,13 @@ impl DevContainer {
     }
 
     /// Find containers belonging to a compose project
-    async fn find_compose_containers(&self, logger: &Logger, project_name: &str) -> Result<Vec<String>> {
+    async fn find_compose_containers(&self, logger: &Logger<'_>, project_name: &str) -> Result<Vec<String>> {
         let project_filter = format!("label=com.docker.compose.project={project_name}");
         self.find_containers_by_filters(logger, &[project_filter], true)
             .await
     }
 
-    async fn find_non_compose_containers(&self, logger: &Logger, all: bool) -> Result<Vec<String>> {
+    async fn find_non_compose_containers(&self, logger: &Logger<'_>, all: bool) -> Result<Vec<String>> {
         let new_label_containers = self
             .find_containers_by_filters(logger, &self.devcontainer_label_filters(), all)
             .await
@@ -396,19 +396,19 @@ impl DevContainer {
 
     pub async fn list_compose_containers(
         &self,
-        logger: &Logger,
+        logger: &Logger<'_>,
         project_name: &str,
     ) -> Result<Vec<ComposeContainerInfo>> {
         let project_filter = format!("label=com.docker.compose.project={project_name}");
         self.list_containers_by_filters(logger, &[project_filter]).await
     }
 
-    pub async fn list_non_compose_containers(&self, logger: &Logger) -> Result<Vec<ComposeContainerInfo>> {
+    pub async fn list_non_compose_containers(&self, logger: &Logger<'_>) -> Result<Vec<ComposeContainerInfo>> {
         let container_ids = self.find_non_compose_containers(logger, true).await?;
         self.list_containers_by_ids(logger, &container_ids).await
     }
 
-    pub async fn stop(&self, logger: &Logger) -> Result<()> {
+    pub async fn stop(&self, logger: &Logger<'_>) -> Result<()> {
         if let Some(project_name) = self.get_compose_project_name().await? {
             let containers = self.find_compose_containers(logger, &project_name).await?;
             if containers.is_empty() {
@@ -438,7 +438,7 @@ impl DevContainer {
         Ok(())
     }
 
-    pub async fn down(&self, logger: &Logger) -> Result<()> {
+    pub async fn down(&self, logger: &Logger<'_>) -> Result<()> {
         if let Some(project_name) = self.get_compose_project_name().await? {
             let containers = self.find_compose_containers(logger, &project_name).await?;
             if containers.is_empty() {
@@ -470,7 +470,7 @@ impl DevContainer {
 
     pub async fn spawn<S: AsRef<str>>(
         &self,
-        logger: &Logger,
+        logger: &Logger<'_>,
         verb: &str,
         desc: &str,
         command: &[S],
@@ -484,7 +484,7 @@ impl DevContainer {
 
     pub async fn exec<S: AsRef<str>>(
         &self,
-        logger: &Logger,
+        logger: &Logger<'_>,
         verb: &str,
         desc: &str,
         command: &[S],
@@ -498,7 +498,7 @@ impl DevContainer {
 
     pub async fn exec_tailed<S: AsRef<str>>(
         &self,
-        logger: &Logger,
+        logger: &Logger<'_>,
         verb: &str,
         desc: &str,
         command: &[S],
@@ -512,7 +512,7 @@ impl DevContainer {
 
     pub async fn exec_capturing_stdout<S: AsRef<str>>(
         &self,
-        logger: &Logger,
+        logger: &Logger<'_>,
         verb: &str,
         desc: &str,
         command: &[S],
@@ -526,7 +526,7 @@ impl DevContainer {
 
     pub async fn exec_capturing<S: AsRef<str>>(
         &self,
-        logger: &Logger,
+        logger: &Logger<'_>,
         verb: &str,
         desc: &str,
         command: &[S],
@@ -540,7 +540,7 @@ impl DevContainer {
 
     pub async fn exec_with_stdin<S: AsRef<str>>(
         &self,
-        logger: &Logger,
+        logger: &Logger<'_>,
         verb: &str,
         desc: &str,
         command: &[S],
@@ -555,7 +555,7 @@ impl DevContainer {
 
     pub async fn exec_with_bytes_stdin<S: AsRef<str>>(
         &self,
-        logger: &Logger,
+        logger: &Logger<'_>,
         verb: &str,
         desc: &str,
         command: &[S],
@@ -570,7 +570,7 @@ impl DevContainer {
 
     pub async fn copy_files_to_container(
         &self,
-        logger: &Logger,
+        logger: &Logger<'_>,
         file_mappings: &[(PathBuf, ContainerFileDestination)],
         root_mode: RootMode,
     ) -> Result<()> {
@@ -677,7 +677,7 @@ impl DevContainer {
 
     /// Detect ports currently listening inside the container by reading /proc/net/tcp and
     /// /proc/net/tcp6. Returns port numbers in host byte order.
-    pub async fn detect_listening_ports(&self, logger: &Logger) -> Result<Vec<u16>> {
+    pub async fn detect_listening_ports(&self, logger: &Logger<'_>) -> Result<Vec<u16>> {
         let output = self
             .exec_capturing_stdout(
                 logger,
@@ -714,6 +714,13 @@ impl DevContainer {
         }
 
         Ok(ports.into_iter().collect())
+    }
+
+    /// Build devcontainer exec args for manual step patterns.
+    pub fn make_exec_args<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Vec<String> {
+        let mut args = self.make_args(root_mode, "exec");
+        args.extend(command.iter().map(|s| s.as_ref().to_string()));
+        args
     }
 
     fn make_args(&self, root_mode: RootMode, subcommand: &str) -> Vec<String> {
@@ -755,7 +762,7 @@ impl DevContainer {
         }
     }
 
-    async fn enable_host_docker_internal_in_rancher_desktop_on_lima(&self, logger: &Logger) -> Result<()> {
+    async fn enable_host_docker_internal_in_rancher_desktop_on_lima(&self, logger: &Logger<'_>) -> Result<()> {
         {
             let mut step = logger.step("Checking", "Rancher Desktop");
             if exec::run(&mut step, &["rdctl", "version"]).await.is_err() {
@@ -807,7 +814,7 @@ impl DevContainer {
         Ok(())
     }
 
-    async fn enable_host_docker_internal_in_linux_dockerd(&self, logger: &Logger) -> Result<()> {
+    async fn enable_host_docker_internal_in_linux_dockerd(&self, logger: &Logger<'_>) -> Result<()> {
         // Check if we're running on Linux
         if !cfg!(target_os = "linux") {
             return Ok(());

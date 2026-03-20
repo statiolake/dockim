@@ -6,7 +6,7 @@ use crate::{
 };
 use miette::{miette, Result, WrapErr};
 
-pub async fn main(logger: &Logger, _config: &Config, args: &Args, shell_args: &BashArgs) -> Result<()> {
+pub async fn main(logger: &Logger<'_>, _config: &Config, args: &Args, shell_args: &BashArgs) -> Result<()> {
     let dc = DevContainer::new(
         args.resolve_workspace_folder()?,
         args.resolve_config_path()?,

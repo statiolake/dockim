@@ -7,12 +7,12 @@ use tokio::{
 
 use miette::{ensure, IntoDiagnostic, Result, WrapErr};
 
-use crate::progress::LogStep;
+use crate::progress::Logger;
 
-// --- Low-level functions (take &mut LogStep) ---
+// --- Low-level functions (take &mut Logger with step header) ---
 
 pub async fn run_spawn<S: AsRef<str> + Debug>(
-    step: &mut LogStep,
+    step: &mut Logger<'_>,
     args: &[S],
 ) -> Result<Child> {
     ensure!(!args.is_empty(), "No command provided to exec");
@@ -42,7 +42,7 @@ pub async fn run_spawn<S: AsRef<str> + Debug>(
 }
 
 pub async fn run<S: AsRef<str> + Debug>(
-    step: &mut LogStep,
+    step: &mut Logger<'_>,
     args: &[S],
 ) -> Result<()> {
     ensure!(!args.is_empty(), "No command provided to exec");
@@ -80,7 +80,7 @@ pub async fn run<S: AsRef<str> + Debug>(
 }
 
 pub async fn run_with_stdin<S: AsRef<str> + Debug>(
-    step: &mut LogStep,
+    step: &mut Logger<'_>,
     args: &[S],
     stdin: Stdio,
 ) -> Result<()> {
@@ -120,7 +120,7 @@ pub async fn run_with_stdin<S: AsRef<str> + Debug>(
 }
 
 pub async fn run_with_bytes_stdin<S: AsRef<str> + Debug>(
-    step: &mut LogStep,
+    step: &mut Logger<'_>,
     args: &[S],
     bytes: &[u8],
 ) -> Result<()> {
@@ -182,7 +182,7 @@ pub async fn run_with_bytes_stdin<S: AsRef<str> + Debug>(
 }
 
 pub async fn run_capturing_stdout<S: AsRef<str> + Debug>(
-    step: &mut LogStep,
+    step: &mut Logger<'_>,
     args: &[S],
 ) -> Result<String> {
     ensure!(!args.is_empty(), "no command provided to exec");
@@ -231,7 +231,7 @@ pub struct ExecOutput {
 }
 
 pub async fn run_capturing<S: AsRef<str> + Debug>(
-    step: &mut LogStep,
+    step: &mut Logger<'_>,
     args: &[S],
 ) -> std::result::Result<ExecOutput, ExecOutput> {
     if args.is_empty() {
@@ -283,7 +283,7 @@ pub async fn run_capturing<S: AsRef<str> + Debug>(
 
 /// Execute a command with live tail display of stdout/stderr.
 pub async fn run_with_tail<S: AsRef<str> + Debug>(
-    step: &mut LogStep,
+    step: &mut Logger<'_>,
     args: &[S],
 ) -> Result<()> {
     ensure!(!args.is_empty(), "No command provided to exec");

@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub async fn main(
-    logger: &Logger,
+    logger: &Logger<'_>,
     _config: &Config,
     args: &Args,
     exec_args: &ExecArgs,
@@ -30,9 +30,9 @@ pub async fn main(
 
     dc.up(logger, false, false).await?;
 
-    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger.clone(), join_set));
+    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger, join_set));
     let _auto_forwarder =
-        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], logger.clone(), join_set);
+        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], logger, join_set);
 
     dc.exec(logger, "Running", "command in container", &exec_args.args, RootMode::No)
         .await

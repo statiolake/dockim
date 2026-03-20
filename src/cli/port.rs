@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub async fn main(
-    logger: &Logger,
+    logger: &Logger<'_>,
     _config: &Config,
     args: &Args,
     port_args: &PortArgs,
@@ -30,7 +30,7 @@ pub async fn main(
 
     dc.up(logger, false, false).await?;
 
-    let forwarder = PortForwarder::new(dc, logger.clone(), join_set);
+    let forwarder = PortForwarder::new(dc, logger, join_set);
 
     match &port_args.subcommand {
         PortSubcommand::Add(add_args) => add_port(logger, &forwarder, add_args).await,
@@ -39,7 +39,7 @@ pub async fn main(
     }
 }
 
-async fn add_port(logger: &Logger, forwarder: &PortForwarder, add_args: &PortAddArgs) -> Result<()> {
+async fn add_port(logger: &Logger<'_>, forwarder: &PortForwarder, add_args: &PortAddArgs) -> Result<()> {
     let (host_port, container_port) = parse_port_descriptor(&add_args.port_descriptor)?;
 
     // We need to forget because forward_port() returns a guard that will stop forwarding on drop
@@ -49,7 +49,7 @@ async fn add_port(logger: &Logger, forwarder: &PortForwarder, add_args: &PortAdd
     Ok(())
 }
 
-async fn remove_port(logger: &Logger, forwarder: &PortForwarder, rm_args: &PortRmArgs) -> Result<()> {
+async fn remove_port(logger: &Logger<'_>, forwarder: &PortForwarder, rm_args: &PortRmArgs) -> Result<()> {
     if rm_args.all {
         forwarder.remove_all_forwarded_ports().await?;
         logger.write("All port forwards removed");
@@ -63,7 +63,7 @@ async fn remove_port(logger: &Logger, forwarder: &PortForwarder, rm_args: &PortR
     Ok(())
 }
 
-async fn list_ports(logger: &Logger, forwarder: &PortForwarder) -> Result<()> {
+async fn list_ports(logger: &Logger<'_>, forwarder: &PortForwarder) -> Result<()> {
     let ports = forwarder.list_forwarded_ports().await?;
 
     if ports.is_empty() {

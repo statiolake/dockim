@@ -1,93 +1,62 @@
-use std::sync::Arc;
-
 use itertools::Itertools;
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
-use tokio::task::JoinSet;
 
 use crate::{
     cli::{Args, BuildArgs},
     config::Config,
     devcontainer::{ContainerFileDestination, DevContainer, RootMode},
+    exec,
     progress::Logger,
 };
 
-pub async fn main(logger: &Logger, config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> {
-    let config = Arc::new(config.clone());
-    let dc = Arc::new(
-        DevContainer::new(
-            args.resolve_workspace_folder()?,
-            args.resolve_config_path()?,
-        )
-        .await
-        .wrap_err("failed to initialize devcontainer client")?,
-    );
+pub async fn main(logger: &Logger<'_>, config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> {
+    let dc = DevContainer::new(
+        args.resolve_workspace_folder()?,
+        args.resolve_config_path()?,
+    )
+    .await
+    .wrap_err("failed to initialize devcontainer client")?;
 
     dc.up(logger, build_args.rebuild, build_args.no_cache).await?;
     let up_cont = dc.inspect(logger).await?;
 
     install_prerequisites(logger, &dc, build_args.neovim_from_source).await?;
 
-    macro_rules! run_sync_or_async {
-        ($($fut:expr),* $(,)?) => {
-            if build_args.no_async {
-                $($fut.await?;)*
-            } else {
-                let mut set = JoinSet::new();
-                $(set.spawn($fut);)*
-                set.join_all()
-                    .await
-                    .into_iter()
-                    .collect::<Result<()>>()
-                    .wrap_err("failed to execute some build step in async")?
-            }
-        }
-    }
-
-    run_sync_or_async! {
+    if build_args.no_async {
         {
-            let config = Arc::clone(&config);
-            let dc = Arc::clone(&dc);
-            let neovim_from_source = build_args.neovim_from_source;
             let span = logger.span("Installing", "Neovim");
-            async move {
-                install_neovim(&span, &config, &dc, neovim_from_source).await
-            }
-        },
+            install_neovim(&span, config, &dc, build_args.neovim_from_source).await?;
+        }
         {
-            let dc = Arc::clone(&dc);
             let span = logger.span("Setting up", "GitHub CLI");
-            async move {
-                setup_github_cli(&span, &dc).await
-            }
-        },
+            setup_github_cli(&span, &dc).await?;
+        }
         {
-            let dc = Arc::clone(&dc);
             let span = logger.span("Copying", "Copilot credentials");
-            async move {
-                copy_copilot(&span, &dc).await
-            }
-        },
-        {
-            let dc = Arc::clone(&dc);
-            let remote_user = up_cont.remote_user.clone();
-            let span = logger.span("Preparing", "/opt directory");
-            async move {
-                prepare_opt_dir(&span, &dc, &remote_user).await
-            }
-        },
+            copy_copilot(&span, &dc).await?;
+        }
+        prepare_opt_dir(logger, &dc, &up_cont.remote_user).await?;
+    } else {
+        let span_neovim = logger.span("Installing", "Neovim");
+        let span_gh = logger.span("Setting up", "GitHub CLI");
+        let span_copilot = logger.span("Copying", "Copilot credentials");
+
+        tokio::try_join!(
+            install_neovim(&span_neovim, config, &dc, build_args.neovim_from_source),
+            setup_github_cli(&span_gh, &dc),
+            copy_copilot(&span_copilot, &dc),
+            prepare_opt_dir(logger, &dc, &up_cont.remote_user),
+        )?;
     }
 
-    {
-        let span = logger.span("Deploying", "dotfiles");
-        install_dotfiles(&span, &config, &dc).await?;
-    }
+    install_dotfiles(logger, config, &dc).await?;
 
     logger.log("Finished", "build completed successfully");
 
     Ok(())
 }
 
-async fn install_prerequisites(logger: &Logger, dc: &DevContainer, _neovim_from_source: bool) -> Result<()> {
+async fn install_prerequisites(logger: &Logger<'_>, dc: &DevContainer, _neovim_from_source: bool) -> Result<()> {
     let span = logger.span("Installing", "prerequisites (zsh, tmux, curl, fzf, ...)");
     let prerequisites = [
         "zsh",
@@ -128,17 +97,18 @@ async fn install_prerequisites(logger: &Logger, dc: &DevContainer, _neovim_from_
 }
 
 async fn install_neovim(
-    logger: &Logger,
+    logger: &Logger<'_>,
     config: &Config,
     dc: &DevContainer,
     neovim_from_source: bool,
 ) -> Result<()> {
-    if dc
-        .exec_capturing_stdout(logger, "Checking", "Neovim version", &["/usr/local/bin/nvim", "--version"], RootMode::No)
-        .await
-        .is_ok()
     {
-        return Ok(());
+        let args = dc.make_exec_args(&["/usr/local/bin/nvim", "--version"], RootMode::No);
+        let mut step = logger.step("Checking", "Neovim version");
+        if exec::run_capturing_stdout(&mut step, &args).await.is_ok() {
+            return Ok(());
+        }
+        step.set_completed(Some("not installed, installing...".into()));
     }
 
     if neovim_from_source {
@@ -149,26 +119,27 @@ async fn install_neovim(
     install_neovim_from_binary(logger, config, dc).await?;
 
     // Test if the binary actually works
-    let Err(output) = dc
-        .exec_capturing(logger, "Checking", "Neovim binary", &["/usr/local/bin/nvim", "--version"], RootMode::No)
-        .await
-    else {
-        return Ok(()); // Binary works fine
-    };
-
-    // Check stderr for glibc compatibility issues
-    if !is_glibc_compatibility_error_str(&output.stderr) {
-        return Err(miette::miette!(
-            "nvim binary test failed: {}",
-            output.stderr
-        ));
+    {
+        let args = dc.make_exec_args(&["/usr/local/bin/nvim", "--version"], RootMode::No);
+        let mut step = logger.step("Checking", "Neovim binary");
+        match exec::run_capturing(&mut step, &args).await {
+            Ok(_) => return Ok(()),
+            Err(output) => {
+                if !is_glibc_compatibility_error_str(&output.stderr) {
+                    step.set_failed();
+                    return Err(miette::miette!(
+                        "nvim binary test failed: {}",
+                        output.stderr
+                    ));
+                }
+                step.set_completed(Some("glibc incompatible, falling back to source build".into()));
+            }
+        }
     }
-
-    logger.write("Warning: Binary installation failed due to glibc compatibility, falling back to source build");
     install_neovim_from_source(logger, config, dc).await
 }
 
-async fn install_neovim_from_binary(logger: &Logger, config: &Config, dc: &DevContainer) -> Result<()> {
+async fn install_neovim_from_binary(logger: &Logger<'_>, config: &Config, dc: &DevContainer) -> Result<()> {
     let arch = dc
         .exec_capturing_stdout(logger, "Querying", "system architecture", &["uname", "-m"], RootMode::No)
         .await
@@ -209,7 +180,7 @@ async fn install_neovim_from_binary(logger: &Logger, config: &Config, dc: &DevCo
     Ok(())
 }
 
-async fn install_neovim_from_source(logger: &Logger, config: &Config, dc: &DevContainer) -> Result<()> {
+async fn install_neovim_from_source(logger: &Logger<'_>, config: &Config, dc: &DevContainer) -> Result<()> {
     // Install source build dependencies
     let source_deps = vec![
         "python3-pip",
@@ -282,15 +253,16 @@ fn is_glibc_compatibility_error_str(error_str: &str) -> bool {
         || error_lower.contains("undefined symbol")
 }
 
-async fn setup_github_cli(logger: &Logger, dc: &DevContainer) -> Result<()> {
-    async fn install(logger: &Logger, dc: &DevContainer) -> Result<()> {
+async fn setup_github_cli(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> {
+    async fn install<'a>(logger: &Logger<'a>, dc: &DevContainer) -> Result<()> {
         // Check if gh is already installed
-        if dc
-            .exec_capturing_stdout(logger, "Checking", "GitHub CLI version", &["~/.local/bin/gh", "--version"], RootMode::No)
-            .await
-            .is_ok()
         {
-            return Ok(());
+            let args = dc.make_exec_args(&["~/.local/bin/gh", "--version"], RootMode::No);
+            let mut step = logger.step("Checking", "GitHub CLI version");
+            if exec::run_capturing_stdout(&mut step, &args).await.is_ok() {
+                return Ok(());
+            }
+            step.set_completed(Some("not found, installing...".into()));
         }
 
         let arch = dc
@@ -356,7 +328,7 @@ async fn setup_github_cli(logger: &Logger, dc: &DevContainer) -> Result<()> {
         .await
     }
 
-    async fn login(logger: &Logger, dc: &DevContainer) -> Result<()> {
+    async fn login<'a>(logger: &Logger<'a>, dc: &DevContainer) -> Result<()> {
         let token = logger.capturing_stdout("Querying", "GitHub auth token", &["gh", "auth", "token"]).await?;
         dc.exec_with_bytes_stdin(
             logger,
@@ -376,7 +348,7 @@ async fn setup_github_cli(logger: &Logger, dc: &DevContainer) -> Result<()> {
     Ok(())
 }
 
-async fn copy_copilot(logger: &Logger, dc: &DevContainer) -> Result<()> {
+async fn copy_copilot(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> {
     let local_home =
         dirs::home_dir().ok_or_else(|| miette!("failed to get local home directory"))?;
     let file_mappings = ["apps.json", "hosts.json", "versions.json"]
@@ -396,7 +368,7 @@ async fn copy_copilot(logger: &Logger, dc: &DevContainer) -> Result<()> {
     Ok(())
 }
 
-async fn prepare_opt_dir(logger: &Logger, dc: &DevContainer, owner_user: &str) -> Result<()> {
+async fn prepare_opt_dir(logger: &Logger<'_>, dc: &DevContainer, owner_user: &str) -> Result<()> {
     dc.exec_tailed(
         logger,
         "Preparing", "/opt directory",
@@ -418,7 +390,7 @@ async fn prepare_opt_dir(logger: &Logger, dc: &DevContainer, owner_user: &str) -
     Ok(())
 }
 
-async fn install_dotfiles(logger: &Logger, config: &Config, dc: &DevContainer) -> Result<()> {
+async fn install_dotfiles(logger: &Logger<'_>, config: &Config, dc: &DevContainer) -> Result<()> {
     dc.exec_tailed(
         logger,
         "Deploying", "dotfiles",

@@ -11,27 +11,41 @@ use crate::{
 
 /// Centralized port-forwarding manager.
 ///
-/// Processes socat container stop requests in a background task spawned into the caller's
-/// `JoinSet`. Call `shutdown()` (or let `Drop` call it) to close the channel, then
-/// `join_set.join_all().await` to wait for all `docker stop` commands to complete.
+/// Stores a Console + verbose for creating Logger instances on demand.
+/// Logger is `!Clone` by design, so background tasks create their own
+/// root-level Loggers from the stored Console.
 pub struct PortForwarder {
     dc: Arc<DevContainer>,
-    logger: Logger,
+    console: crate::console::Console,
+    verbose: bool,
     stop_tx: std::sync::Mutex<Option<mpsc::UnboundedSender<String>>>,
 }
 
 impl PortForwarder {
-    pub fn new(dc: Arc<DevContainer>, logger: Logger, join_set: &mut JoinSet<()>) -> Self {
+    pub fn new(
+        dc: Arc<DevContainer>,
+        logger: &Logger<'_>,
+        join_set: &mut JoinSet<()>,
+    ) -> Self {
         let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<String>();
-        let bg_logger = logger.clone();
+        let bg_console = logger.console().clone();
+        let verbose = logger.verbose();
         join_set.spawn(async move {
             while let Some(container_name) = stop_rx.recv().await {
-                let _ = bg_logger.exec("Stopping", "port-forward container", &["docker", "stop", &container_name]).await;
+                let bg_logger = Logger::new(bg_console.clone(), verbose);
+                let _ = bg_logger
+                    .exec(
+                        "Stopping",
+                        "port-forward container",
+                        &["docker", "stop", &container_name],
+                    )
+                    .await;
             }
         });
         Self {
             dc,
-            logger,
+            console: logger.console().clone(),
+            verbose,
             stop_tx: std::sync::Mutex::new(Some(stop_tx)),
         }
     }
@@ -40,18 +54,24 @@ impl PortForwarder {
         self.stop_tx.lock().unwrap().take();
     }
 
+    fn logger(&self) -> Logger<'static> {
+        Logger::new(self.console.clone(), self.verbose)
+    }
+
     pub async fn forward_port(
         &self,
         host_port: &str,
         container_port: &str,
     ) -> Result<PortForwardGuard> {
+        let logger = self.logger();
+
         let socat_container_name = self
-            .socat_container_name(host_port)
+            .socat_container_name(&logger)
             .await
             .wrap_err("failed to determine port-forwarding container name")?;
         let up_output = self
             .dc
-            .inspect(&self.logger)
+            .inspect(&logger)
             .await
             .wrap_err("failed to get devcontainer status")?;
 
@@ -61,14 +81,19 @@ impl PortForwarder {
             ip_address: String,
         }
 
-        let network_output = self.logger.capturing_stdout("Inspecting", "container network settings", &[
-            "docker",
-            "inspect",
-            "--format",
-            "{{ json .NetworkSettings.Networks }}",
-            &up_output.container_id,
-        ])
-        .await?;
+        let network_output = logger
+            .capturing_stdout(
+                "Inspecting",
+                "container network settings",
+                &[
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{ json .NetworkSettings.Networks }}",
+                    &up_output.container_id,
+                ],
+            )
+            .await?;
         let container_networks: HashMap<String, ContainerNetwork> =
             serde_json::from_str(&network_output)
                 .into_diagnostic()
@@ -85,53 +110,71 @@ impl PortForwarder {
             container_network.ip_address, container_port
         );
 
-        self.logger.exec("Launching", "port-forward container", &[
-            "docker",
-            "run",
-            "-d",
-            "--rm",
-            "--net",
-            container_network_name,
-            "--name",
-            &socat_container_name,
-            "-p",
-            &docker_publish_port,
-            "alpine/socat",
-            "TCP-LISTEN:1234,fork",
-            &socat_target,
-        ])
-        .await
-        .wrap_err("failed to launch port-forwarding container")?;
+        logger
+            .exec(
+                "Launching",
+                "port-forward container",
+                &[
+                    "docker",
+                    "run",
+                    "-d",
+                    "--rm",
+                    "--net",
+                    container_network_name,
+                    "--name",
+                    &socat_container_name,
+                    "-p",
+                    &docker_publish_port,
+                    "alpine/socat",
+                    "TCP-LISTEN:1234,fork",
+                    &socat_target,
+                ],
+            )
+            .await
+            .wrap_err("failed to launch port-forwarding container")?;
 
         Ok(self.create_guard(socat_container_name))
     }
 
-    pub async fn stop_forward_port(&self, host_port: &str) -> Result<()> {
+    pub async fn stop_forward_port(&self, _host_port: &str) -> Result<()> {
+        let logger = self.logger();
         let socat_container_name = self
-            .socat_container_name(host_port)
+            .socat_container_name(&logger)
             .await
             .wrap_err("failed to determine port-forwarding container name")?;
-        self.logger.exec("Stopping", "port-forward container", &["docker", "stop", &socat_container_name]).await
+        logger
+            .exec(
+                "Stopping",
+                "port-forward container",
+                &["docker", "stop", &socat_container_name],
+            )
+            .await
     }
 
     pub async fn list_forwarded_ports(&self) -> Result<Vec<ForwardedPort>> {
+        let logger = self.logger();
         let socat_container_name_prefix = self
-            .socat_container_name("")
+            .socat_container_name(&logger)
             .await
             .wrap_err("failed to determine port-forwarding container name")?;
 
         let name_filter = format!("name={socat_container_name_prefix}");
-        let port_forward_containers = self.logger.capturing_stdout("Listing", "port-forward containers", &[
-            "docker",
-            "ps",
-            "--filter",
-            &name_filter,
-            "--format",
-            "{{.Names}}\t{{.Command}}",
-            "--no-trunc",
-        ])
-        .await
-        .wrap_err("failed to enumerate port-forwarding containers")?;
+        let port_forward_containers = logger
+            .capturing_stdout(
+                "Listing",
+                "port-forward containers",
+                &[
+                    "docker",
+                    "ps",
+                    "--filter",
+                    &name_filter,
+                    "--format",
+                    "{{.Names}}\t{{.Command}}",
+                    "--no-trunc",
+                ],
+            )
+            .await
+            .wrap_err("failed to enumerate port-forwarding containers")?;
 
         let mut ports = Vec::new();
         for line in port_forward_containers.lines() {
@@ -139,13 +182,10 @@ impl PortForwarder {
                 continue;
             };
 
-            // Extract host port from container name: dockim-{container_id}-socat-{host_port}
             let Some(host_port) = name.split('-').next_back() else {
                 continue;
             };
 
-            // Extract container port from socat command
-            // Full command: "TCP-LISTEN:1234,fork TCP-CONNECT:172.17.0.2:8080"
             let container_port = command
                 .split_whitespace()
                 .find_map(|arg| {
@@ -192,16 +232,16 @@ impl PortForwarder {
         }
     }
 
-    async fn socat_container_name(&self, host_port: &str) -> Result<String> {
+    async fn socat_container_name(&self, logger: &Logger<'_>) -> Result<String> {
         let up_output = self
             .dc
-            .inspect(&self.logger)
+            .inspect(logger)
             .await
             .wrap_err("failed to get devcontainer status")?;
 
         Ok(format!(
-            "dockim-{}-socat-{}",
-            up_output.container_id, host_port
+            "dockim-{}-socat-",
+            up_output.container_id
         ))
     }
 }

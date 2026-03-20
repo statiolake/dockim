@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn check_requirements(logger: &dockim::progress::Logger) -> Result<()> {
+async fn check_requirements(logger: &dockim::progress::Logger<'_>) -> Result<()> {
     {
         let mut step = logger.step("Checking", "devcontainer CLI");
         match exec::run_capturing_stdout(&mut step, &["devcontainer", "--version"]).await {

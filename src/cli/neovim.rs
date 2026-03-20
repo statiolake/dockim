@@ -26,7 +26,7 @@ pub const CONTAINER_ID_PLACEHOLDER: &str = "{container_id}";
 pub const WORKSPACE_FOLDER_PLACEHOLDER: &str = "{workspace_folder}";
 
 pub async fn main(
-    logger: &Logger,
+    logger: &Logger<'_>,
     config: &Config,
     args: &Args,
     neovim_args: &NeovimArgs,
@@ -73,7 +73,7 @@ pub async fn main(
     };
     let clipboard_port = clipboard.as_ref().map(|s| s.port);
 
-    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger.clone(), join_set));
+    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger, join_set));
 
     // Determine ports for remote UI mode (needed before starting auto-forwarder).
     let (host_port, container_port) = if neovim_args.no_remote_ui {
@@ -97,7 +97,7 @@ pub async fn main(
         .into_iter()
         .collect();
     let _auto_forwarder =
-        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), exclude_ports, logger.clone(), join_set);
+        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), exclude_ports, logger, join_set);
 
     // --- Run Neovim ---
 
@@ -120,7 +120,7 @@ pub async fn main(
 }
 
 async fn populate_envs(
-    logger: &Logger,
+    logger: &Logger<'_>,
     args: &Args,
     is_direct: bool,
     clipboard_server_port: Option<u16>,
@@ -169,7 +169,7 @@ fn format_envs_to_invocation(envs: &HashMap<&'static str, String>) -> Vec<String
 }
 
 async fn run_neovim_directly(
-    logger: &Logger,
+    logger: &Logger<'_>,
     dc: &DevContainer,
     args: &Args,
     clipboard_server_port: Option<u16>,
@@ -183,7 +183,7 @@ async fn run_neovim_directly(
 }
 
 async fn run_neovim_server_and_attach(
-    logger: &Logger,
+    logger: &Logger<'_>,
     config: &Config,
     dc: &DevContainer,
     args: &Args,
@@ -225,7 +225,7 @@ async fn run_neovim_server_and_attach(
 }
 
 async fn run_neovim_client_with_retry(
-    logger: &Logger,
+    logger: &Logger<'_>,
     config: &Config,
     dc: &DevContainer,
     host_port: &str,
@@ -268,7 +268,7 @@ async fn run_neovim_client_with_retry(
     Ok(())
 }
 
-async fn run_neovim_client(logger: &Logger, config: &Config, args: &[String], min_duration: Duration) -> Result<()> {
+async fn run_neovim_client(logger: &Logger<'_>, config: &Config, args: &[String], min_duration: Duration) -> Result<()> {
     if config.remote.background {
         run_background_neovim_client(logger, args).await
     } else {
@@ -276,7 +276,7 @@ async fn run_neovim_client(logger: &Logger, config: &Config, args: &[String], mi
     }
 }
 
-async fn run_background_neovim_client(logger: &Logger, args: &[String]) -> Result<()> {
+async fn run_background_neovim_client(logger: &Logger<'_>, args: &[String]) -> Result<()> {
     let mut child = logger.spawn("Launching", "Neovim client (background)", args).await?;
     // wait for minimum duration and check if the child process is still running
     time::sleep(Duration::from_millis(500)).await;
@@ -287,7 +287,7 @@ async fn run_background_neovim_client(logger: &Logger, args: &[String]) -> Resul
     }
 }
 
-async fn run_foreground_neovim_client(logger: &Logger, args: &[String], min_duration: Duration) -> Result<()> {
+async fn run_foreground_neovim_client(logger: &Logger<'_>, args: &[String], min_duration: Duration) -> Result<()> {
     let start = Instant::now();
     let output = {
         let _suppress = OutputSuppressGuard::new();
@@ -306,7 +306,7 @@ async fn run_foreground_neovim_client(logger: &Logger, args: &[String], min_dura
 }
 
 async fn handle_connection_failure(
-    logger: &Logger,
+    logger: &Logger<'_>,
     nvim: &Mutex<Child>,
     error: &Report,
     retry_interval: u64,

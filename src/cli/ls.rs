@@ -4,7 +4,7 @@ use crate::{config::Config, progress::Logger};
 
 use super::{Args, LsArgs};
 
-pub async fn main(logger: &Logger, _config: &Config, args: &Args, _ls_args: &LsArgs) -> Result<()> {
+pub async fn main(logger: &Logger<'_>, _config: &Config, args: &Args, _ls_args: &LsArgs) -> Result<()> {
     let workspace_folder = args.resolve_workspace_folder()?;
     let configs = args.discover_devcontainer_configs()?;
 

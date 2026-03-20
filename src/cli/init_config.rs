@@ -6,7 +6,7 @@ use crate::{cli::Args, progress::Logger};
 use super::InitConfigArgs;
 
 pub async fn main(
-    logger: &Logger,
+    logger: &Logger<'_>,
     _config: &crate::config::Config,
     _args: &Args,
     _init_config_args: &InitConfigArgs,

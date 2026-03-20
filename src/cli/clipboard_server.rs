@@ -7,7 +7,7 @@ use crate::{
 };
 
 pub async fn main(
-    logger: &Logger,
+    logger: &Logger<'_>,
     _config: &Config,
     args: &Args,
     _clipboard_server_args: &ClipboardServerArgs,

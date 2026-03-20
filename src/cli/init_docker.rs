@@ -7,7 +7,7 @@ use crate::{cli::Args, progress::Logger};
 use super::InitDockerArgs;
 
 pub async fn main(
-    logger: &Logger,
+    logger: &Logger<'_>,
     _config: &crate::config::Config,
     _args: &Args,
     _init_docker_args: &InitDockerArgs,

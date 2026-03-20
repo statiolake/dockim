@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{sync::oneshot, task::JoinSet, time::sleep};
 
 use crate::{
+    console::Console,
     devcontainer::DevContainer,
     port_forwarder::{PortForwardGuard, PortForwarder},
     progress::Logger,
@@ -26,12 +27,14 @@ impl AutoPortForwarder {
         dc: Arc<DevContainer>,
         manager: Arc<PortForwarder>,
         exclude_ports: Vec<u16>,
-        logger: Logger,
+        logger: &Logger<'_>,
         join_set: &mut JoinSet<()>,
     ) -> Self {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let console = logger.console().clone();
+        let verbose = logger.verbose();
 
-        join_set.spawn(run_auto_forward(dc, manager, shutdown_rx, exclude_ports, logger));
+        join_set.spawn(run_auto_forward(dc, manager, shutdown_rx, exclude_ports, console, verbose));
 
         Self {
             shutdown_tx: std::sync::Mutex::new(Some(shutdown_tx)),
@@ -57,8 +60,10 @@ async fn run_auto_forward(
     manager: Arc<PortForwarder>,
     mut shutdown_rx: oneshot::Receiver<()>,
     exclude_ports: Vec<u16>,
-    logger: Logger,
+    console: Console,
+    verbose: bool,
 ) {
+    let logger = Logger::new(console, verbose);
     let mut forwarded: HashMap<u16, (u16, PortForwardGuard)> = HashMap::new();
 
     loop {

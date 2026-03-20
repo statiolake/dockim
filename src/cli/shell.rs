@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub async fn main(
-    logger: &Logger,
+    logger: &Logger<'_>,
     config: &Config,
     args: &Args,
     shell_args: &ShellArgs,
@@ -46,9 +46,9 @@ pub async fn main(
         crate::cli::build::main(logger, config, args, &build_args).await?;
     }
 
-    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger.clone(), join_set));
+    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger, join_set));
     let _auto_forwarder =
-        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], logger.clone(), join_set);
+        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], logger, join_set);
 
     let mut cmd_args = vec![&*config.shell];
     cmd_args.extend(shell_args.args.iter().map(|s| s.as_str()));
