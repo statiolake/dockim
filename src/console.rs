@@ -5,6 +5,8 @@ use std::{
     time::Instant,
 };
 
+use crate::log;
+
 use crossterm::{cursor, execute, terminal};
 use unicode_width::UnicodeWidthStr;
 
@@ -87,7 +89,7 @@ impl Console {
     /// Append text to committed zone. Indent is applied automatically.
     /// In non-TTY mode, also prints immediately to stderr.
     pub fn write_line(&self, text: &str) {
-        if text.is_empty() {
+        if text.is_empty() || log::is_suppressed() {
             return;
         }
 
@@ -164,6 +166,9 @@ impl Console {
     /// In non-TTY mode, prints on the first non-empty call only (so the header
     /// appears before any child output).
     pub fn set_live(&self, lines: Vec<String>) {
+        if log::is_suppressed() {
+            return;
+        }
         let mut state = self.state.lock().unwrap();
         let indent = match state.nodes.get(&self.node_id) {
             Some(node) => node.indent.clone(),
