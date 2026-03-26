@@ -33,6 +33,25 @@ fn is_suppressed() -> bool {
     SUPPRESSED.load(Ordering::Relaxed)
 }
 
+/// Always returns `Stdio::inherit()`, even while a [`SuppressGuard`] is active.
+///
+/// Use this for the foreground interactive process itself (bash, shell, neovim, …) that
+/// intentionally owns the TTY — suppression must not affect its own I/O.
+pub fn force_inherit_stdio() -> std::process::Stdio {
+    std::process::Stdio::inherit()
+}
+
+/// Run `stty sane` to restore the terminal to a sane state, unless a [`SuppressGuard`] is active.
+///
+/// Skipped when suppressed because the interactive foreground process owns the TTY at that point;
+/// running `stty sane` from a background task would destroy readline's raw mode.
+pub async fn reset_terminal_if_needed() {
+    if is_suppressed() {
+        return;
+    }
+    let _ = tokio::process::Command::new("stty").arg("sane").status().await;
+}
+
 use crossterm::{cursor, execute, terminal};
 use unicode_width::UnicodeWidthStr;
 

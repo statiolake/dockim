@@ -15,7 +15,7 @@ use tempfile::{NamedTempFile, TempPath};
 use tokio::{net::TcpListener, process::Child, sync::Mutex};
 
 use crate::{
-    exec::{self, ExecOutput},
+    exec::ExecOutput,
     progress::Logger,
 };
 
@@ -111,7 +111,7 @@ impl DevContainer {
             *self.cached_up_output.lock().await = None;
         }
 
-        logger.exec_with_tail("Building", "dev container", &args).await?;
+        logger.exec("Building", "dev container", &args).await?;
 
         self.enable_host_docker_internal_in_rancher_desktop_on_lima(logger)
             .await?;
@@ -496,7 +496,10 @@ impl DevContainer {
         logger.exec(verb, desc, &args).await
     }
 
-    pub async fn exec_tailed<S: AsRef<str>>(
+    /// Execute a foreground interactive process that owns the TTY (bash, shell, neovim, …).
+    ///
+    /// Always inherits stdout/stderr regardless of suppression state.
+    pub async fn exec_interactive<S: AsRef<str>>(
         &self,
         logger: &Logger<'_>,
         verb: &str,
@@ -507,7 +510,7 @@ impl DevContainer {
         let mut args = self.make_args(root_mode, "exec");
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
-        logger.exec_with_tail(verb, desc, &args).await
+        logger.exec_interactive(verb, desc, &args).await
     }
 
     pub async fn exec_capturing_stdout<S: AsRef<str>>(
@@ -763,12 +766,8 @@ impl DevContainer {
     }
 
     async fn enable_host_docker_internal_in_rancher_desktop_on_lima(&self, logger: &Logger<'_>) -> Result<()> {
-        {
-            let mut step = logger.step("Checking", "Rancher Desktop");
-            if exec::run(&mut step, &["rdctl", "version"]).await.is_err() {
-                step.set_completed(Some("not installed, skipping".into()));
-                return Ok(());
-            }
+        if logger.exec("Checking", "Rancher Desktop", &["rdctl", "version"]).await.is_err() {
+            return Ok(());
         }
 
         let host_ip_addr = {

@@ -54,7 +54,7 @@ pub async fn main(
     let mut cmd_args = vec![&*config.shell];
     cmd_args.extend(shell_args.args.iter().map(|s| s.as_str()));
     let _suppress = SuppressGuard::new();
-    dc.exec(logger, "Running", "shell", &cmd_args, RootMode::No).await.wrap_err(miette!(
+    dc.exec_interactive(logger, "Running", "shell", &cmd_args, RootMode::No).await.wrap_err(miette!(
         help = "try `dockim build --rebuild` first",
         "failed to execute `{}` on the container",
         config.shell

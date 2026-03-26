@@ -17,7 +17,7 @@ pub async fn main(
     _config: &Config,
     args: &Args,
     port_args: &PortArgs,
-    join_set: &mut task::JoinSet<()>,
+    _join_set: &mut task::JoinSet<()>,
 ) -> Result<()> {
     let dc = Arc::new(
         DevContainer::new(
@@ -30,7 +30,14 @@ pub async fn main(
 
     dc.up(logger, false, false).await?;
 
-    let forwarder = PortForwarder::new(dc, logger, join_set);
+    // `port add` creates a persistent forwarding: the socat container is intentionally kept alive
+    // until the user explicitly removes it with `port rm`.  To achieve this the PortForwardGuard
+    // is leaked, which also leaks its stop_tx clone and keeps the cleanup channel open
+    // indefinitely.  Passing the caller's JoinSet would therefore cause join_all() to block
+    // forever.  A local JoinSet is used instead so the cleanup task is simply aborted when this
+    // function returns — safe because port teardown is the responsibility of `port rm`, not of
+    // process exit.
+    let forwarder = PortForwarder::new(dc, logger, &mut task::JoinSet::new());
 
     match &port_args.subcommand {
         PortSubcommand::Add(add_args) => add_port(logger, &forwarder, add_args).await,

@@ -271,14 +271,17 @@ impl<'a> Logger<'a> {
         exec::run(&mut step, args).await
     }
 
-    pub async fn exec_with_tail<S: AsRef<str> + Debug>(
+    /// Execute a foreground interactive process that owns the TTY (bash, shell, neovim, …).
+    ///
+    /// Always inherits stdout/stderr regardless of suppression state.
+    pub async fn exec_interactive<S: AsRef<str> + Debug>(
         &self,
         verb: &str,
         desc: &str,
         args: &[S],
     ) -> Result<()> {
         let mut step = self.step(verb, desc);
-        exec::run_with_tail(&mut step, args).await
+        exec::run_interactive(&mut step, args).await
     }
 
     pub async fn capturing_stdout<S: AsRef<str> + Debug>(

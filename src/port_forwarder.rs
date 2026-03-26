@@ -66,7 +66,7 @@ impl PortForwarder {
         let logger = self.logger();
 
         let socat_container_name = self
-            .socat_container_name(&logger)
+            .socat_container_name(&logger, host_port)
             .await
             .wrap_err("failed to determine port-forwarding container name")?;
         let up_output = self
@@ -136,10 +136,10 @@ impl PortForwarder {
         Ok(self.create_guard(socat_container_name))
     }
 
-    pub async fn stop_forward_port(&self, _host_port: &str) -> Result<()> {
+    pub async fn stop_forward_port(&self, host_port: &str) -> Result<()> {
         let logger = self.logger();
         let socat_container_name = self
-            .socat_container_name(&logger)
+            .socat_container_name(&logger, host_port)
             .await
             .wrap_err("failed to determine port-forwarding container name")?;
         logger
@@ -154,7 +154,7 @@ impl PortForwarder {
     pub async fn list_forwarded_ports(&self) -> Result<Vec<ForwardedPort>> {
         let logger = self.logger();
         let socat_container_name_prefix = self
-            .socat_container_name(&logger)
+            .socat_container_name_prefix(&logger)
             .await
             .wrap_err("failed to determine port-forwarding container name")?;
 
@@ -232,17 +232,18 @@ impl PortForwarder {
         }
     }
 
-    async fn socat_container_name(&self, logger: &Logger<'_>) -> Result<String> {
+    async fn socat_container_name_prefix(&self, logger: &Logger<'_>) -> Result<String> {
         let up_output = self
             .dc
             .inspect(logger)
             .await
             .wrap_err("failed to get devcontainer status")?;
 
-        Ok(format!(
-            "dockim-{}-socat-",
-            up_output.container_id
-        ))
+        Ok(format!("dockim-{}-socat-", up_output.container_id))
+    }
+
+    async fn socat_container_name(&self, logger: &Logger<'_>, host_port: &str) -> Result<String> {
+        Ok(format!("{}{host_port}", self.socat_container_name_prefix(logger).await?))
     }
 }
 

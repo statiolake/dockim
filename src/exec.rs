@@ -7,7 +7,10 @@ use tokio::{
 
 use miette::{ensure, IntoDiagnostic, Result, WrapErr};
 
-use crate::progress::Logger;
+use crate::{
+    console::{force_inherit_stdio, reset_terminal_if_needed},
+    progress::Logger,
+};
 
 // --- Low-level functions (take &mut Logger with step header) ---
 
@@ -27,8 +30,8 @@ pub async fn run_spawn<S: AsRef<str> + Debug>(
     match Command::new(command)
         .args(cmd_args.iter().map(|s| s.as_ref()))
         .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .into_diagnostic()
         .wrap_err("spawn failed")
@@ -41,6 +44,7 @@ pub async fn run_spawn<S: AsRef<str> + Debug>(
     }
 }
 
+/// Execute a command with live tail display of stdout/stderr.
 pub async fn run<S: AsRef<str> + Debug>(
     step: &mut Logger<'_>,
     args: &[S],
@@ -54,29 +58,64 @@ pub async fn run<S: AsRef<str> + Debug>(
     let command = args[0].as_ref();
     let cmd_args = &args[1..];
 
-    let status = match Command::new(command)
+    let mut child = match Command::new(command)
         .args(cmd_args.iter().map(|s| s.as_ref()))
-        .status()
-        .await
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .into_diagnostic()
         .wrap_err("exec failed")
     {
-        Ok(s) => s,
+        Ok(c) => c,
         Err(e) => {
             step.set_failed();
             return Err(e);
         }
     };
 
-    if status.success() {
-        step.set_completed(None);
-    } else {
-        step.set_failed();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
+    let mut stdout_reader = BufReader::new(stdout).lines();
+    let mut stderr_reader = BufReader::new(stderr).lines();
+
+    loop {
+        tokio::select! {
+            line = stdout_reader.next_line() => {
+                match line.into_diagnostic()? {
+                    Some(line) => step.tail_line(line),
+                    None => {
+                        while let Some(line) = stderr_reader.next_line().await.into_diagnostic()? {
+                            step.tail_line(line);
+                        }
+                        break;
+                    }
+                }
+            }
+            line = stderr_reader.next_line() => {
+                match line.into_diagnostic()? {
+                    Some(line) => step.tail_line(line),
+                    None => {
+                        while let Some(line) = stdout_reader.next_line().await.into_diagnostic()? {
+                            step.tail_line(line);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     }
 
-    ensure!(status.success(), "Command returned non-successful status");
+    let status = child.wait().await.into_diagnostic()?;
 
-    reset_terminal().await
+    if status.success() {
+        step.set_completed(None);
+        Ok(())
+    } else {
+        step.set_failed();
+        miette::bail!("Command returned non-successful status");
+    }
 }
 
 pub async fn run_with_stdin<S: AsRef<str> + Debug>(
@@ -96,6 +135,8 @@ pub async fn run_with_stdin<S: AsRef<str> + Debug>(
     let status = match Command::new(command)
         .args(cmd_args.iter().map(|s| s.as_ref()))
         .stdin(stdin)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()
         .await
         .into_diagnostic()
@@ -136,6 +177,8 @@ pub async fn run_with_bytes_stdin<S: AsRef<str> + Debug>(
     let mut child = match Command::new(command)
         .args(cmd_args.iter().map(|s| s.as_ref()))
         .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .into_diagnostic()
     {
@@ -281,8 +324,10 @@ pub async fn run_capturing<S: AsRef<str> + Debug>(
     }
 }
 
-/// Execute a command with live tail display of stdout/stderr.
-pub async fn run_with_tail<S: AsRef<str> + Debug>(
+/// Execute a foreground interactive process that owns the TTY (bash, shell, neovim, …).
+///
+/// Always inherits stdout/stderr regardless of suppression state.
+pub async fn run_interactive<S: AsRef<str> + Debug>(
     step: &mut Logger<'_>,
     args: &[S],
 ) -> Result<()> {
@@ -295,67 +340,30 @@ pub async fn run_with_tail<S: AsRef<str> + Debug>(
     let command = args[0].as_ref();
     let cmd_args = &args[1..];
 
-    let mut child = match Command::new(command)
+    let status = match Command::new(command)
         .args(cmd_args.iter().map(|s| s.as_ref()))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stdout(force_inherit_stdio())
+        .stderr(force_inherit_stdio())
+        .status()
+        .await
         .into_diagnostic()
         .wrap_err("exec failed")
     {
-        Ok(c) => c,
+        Ok(s) => s,
         Err(e) => {
             step.set_failed();
             return Err(e);
         }
     };
 
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-
-    let mut stdout_reader = BufReader::new(stdout).lines();
-    let mut stderr_reader = BufReader::new(stderr).lines();
-
-    loop {
-        tokio::select! {
-            line = stdout_reader.next_line() => {
-                match line.into_diagnostic()? {
-                    Some(line) => step.tail_line(line),
-                    None => {
-                        while let Some(line) = stderr_reader.next_line().await.into_diagnostic()? {
-                            step.tail_line(line);
-                        }
-                        break;
-                    }
-                }
-            }
-            line = stderr_reader.next_line() => {
-                match line.into_diagnostic()? {
-                    Some(line) => step.tail_line(line),
-                    None => {
-                        while let Some(line) = stdout_reader.next_line().await.into_diagnostic()? {
-                            step.tail_line(line);
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    let status = child.wait().await.into_diagnostic()?;
-
     if status.success() {
         step.set_completed(None);
-        Ok(())
     } else {
         step.set_failed();
-        miette::bail!("Command returned non-successful status");
     }
-}
 
-async fn reset_terminal() -> Result<()> {
-    let _ = Command::new("stty").arg("sane").status().await;
+    ensure!(status.success(), "Command returned non-successful status");
+
+    reset_terminal_if_needed().await;
     Ok(())
 }

@@ -179,7 +179,7 @@ async fn run_neovim_directly(
     args.push("TERM=screen-256color".to_string());
     args.push("nvim".to_string());
     let _suppress = SuppressGuard::new();
-    dc.exec(logger, "Launching", "Neovim", &args, RootMode::No).await
+    dc.exec_interactive(logger, "Launching", "Neovim", &args, RootMode::No).await
 }
 
 async fn run_neovim_server_and_attach(
@@ -291,7 +291,7 @@ async fn run_foreground_neovim_client(logger: &Logger<'_>, args: &[String], min_
     let start = Instant::now();
     let output = {
         let _suppress = SuppressGuard::new();
-        logger.exec("Launching", "Neovim client", args).await
+        logger.exec_interactive("Launching", "Neovim client", args).await
     };
     let elapsed = start.elapsed();
 

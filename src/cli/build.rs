@@ -73,7 +73,7 @@ async fn install_prerequisites(logger: &Logger<'_>, dc: &DevContainer, _neovim_f
     ];
 
     // Sometimes apt-get update fails without 777 permissions on /tmp
-    dc.exec_tailed(
+    dc.exec(
         &span,
         "Running", "apt-get update && install",
         &[
@@ -157,7 +157,7 @@ async fn install_neovim_from_binary(logger: &Logger<'_>, config: &Config, dc: &D
         config.neovim_binary_repository, config.neovim_version, arch
     );
 
-    dc.exec_tailed(
+    dc.exec(
         logger,
         "Installing", "Neovim from binary",
         &[
@@ -198,7 +198,7 @@ async fn install_neovim_from_source(logger: &Logger<'_>, config: &Config, dc: &D
         "unzip",
     ];
 
-    dc.exec_tailed(
+    dc.exec(
         logger,
         "Installing", "Neovim source build dependencies",
         &[
@@ -228,10 +228,10 @@ async fn install_neovim_from_source(logger: &Logger<'_>, config: &Config, dc: &D
         neovim_version = neovim_version
     );
 
-    dc.exec_tailed(logger, "Building", "Neovim from source", &["sh", "-c", &build_cmd], RootMode::No).await?;
+    dc.exec(logger, "Building", "Neovim from source", &["sh", "-c", &build_cmd], RootMode::No).await?;
 
     // Install as root
-    dc.exec_tailed(
+    dc.exec(
         logger,
         "Installing", "Neovim build artifacts",
         &["sh", "-c", "cd /tmp/neovim && make install"],
@@ -240,7 +240,7 @@ async fn install_neovim_from_source(logger: &Logger<'_>, config: &Config, dc: &D
     .await?;
 
     // Cleanup
-    dc.exec_tailed(logger, "Cleaning", "Neovim build directory", &["rm", "-rf", "/tmp/neovim"], RootMode::No).await?;
+    dc.exec(logger, "Cleaning", "Neovim build directory", &["rm", "-rf", "/tmp/neovim"], RootMode::No).await?;
 
     Ok(())
 }
@@ -302,7 +302,7 @@ async fn setup_github_cli(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> 
             arch
         );
 
-        dc.exec_tailed(
+        dc.exec(
             logger,
             "Installing", "GitHub CLI",
             &[
@@ -369,7 +369,7 @@ async fn copy_copilot(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> {
 }
 
 async fn prepare_opt_dir(logger: &Logger<'_>, dc: &DevContainer, owner_user: &str) -> Result<()> {
-    dc.exec_tailed(
+    dc.exec(
         logger,
         "Preparing", "/opt directory",
         &[
@@ -391,7 +391,7 @@ async fn prepare_opt_dir(logger: &Logger<'_>, dc: &DevContainer, owner_user: &st
 }
 
 async fn install_dotfiles(logger: &Logger<'_>, config: &Config, dc: &DevContainer) -> Result<()> {
-    dc.exec_tailed(
+    dc.exec(
         logger,
         "Deploying", "dotfiles",
         &[
