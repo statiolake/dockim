@@ -9,7 +9,12 @@ use crate::{
     progress::Logger,
 };
 
-pub async fn main(logger: &Logger<'_>, config: &Config, args: &Args, build_args: &BuildArgs) -> Result<()> {
+pub async fn main(
+    logger: &Logger<'_>,
+    config: &Config,
+    args: &Args,
+    build_args: &BuildArgs,
+) -> Result<()> {
     let dc = DevContainer::new(
         args.resolve_workspace_folder()?,
         args.resolve_config_path()?,
@@ -17,7 +22,8 @@ pub async fn main(logger: &Logger<'_>, config: &Config, args: &Args, build_args:
     .await
     .wrap_err("failed to initialize devcontainer client")?;
 
-    dc.up(logger, build_args.rebuild, build_args.no_cache).await?;
+    dc.up(logger, build_args.rebuild, build_args.no_cache)
+        .await?;
     let up_cont = dc.inspect(logger).await?;
 
     install_prerequisites(logger, &dc, build_args.neovim_from_source).await?;
@@ -56,7 +62,11 @@ pub async fn main(logger: &Logger<'_>, config: &Config, args: &Args, build_args:
     Ok(())
 }
 
-async fn install_prerequisites(logger: &Logger<'_>, dc: &DevContainer, _neovim_from_source: bool) -> Result<()> {
+async fn install_prerequisites(
+    logger: &Logger<'_>,
+    dc: &DevContainer,
+    _neovim_from_source: bool,
+) -> Result<()> {
     let span = logger.span("Installing", "prerequisites (zsh, tmux, curl, fzf, ...)");
     let prerequisites = [
         "zsh",
@@ -75,7 +85,8 @@ async fn install_prerequisites(logger: &Logger<'_>, dc: &DevContainer, _neovim_f
     // Sometimes apt-get update fails without 777 permissions on /tmp
     dc.exec(
         &span,
-        "Running", "apt-get update && install",
+        "Running",
+        "apt-get update && install",
         &[
             "sh",
             "-c",
@@ -103,7 +114,9 @@ async fn install_neovim(
     neovim_from_source: bool,
 ) -> Result<()> {
     {
-        let args = dc.make_exec_args(&["/usr/local/bin/nvim", "--version"], RootMode::No);
+        let args = dc
+            .make_exec_args(logger, &["/usr/local/bin/nvim", "--version"], RootMode::No)
+            .await?;
         let mut step = logger.step("Checking", "Neovim version");
         if exec::run_capturing_stdout(&mut step, &args).await.is_ok() {
             return Ok(());
@@ -120,7 +133,9 @@ async fn install_neovim(
 
     // Test if the binary actually works
     {
-        let args = dc.make_exec_args(&["/usr/local/bin/nvim", "--version"], RootMode::No);
+        let args = dc
+            .make_exec_args(logger, &["/usr/local/bin/nvim", "--version"], RootMode::No)
+            .await?;
         let mut step = logger.step("Checking", "Neovim binary");
         match exec::run_capturing(&mut step, &args).await {
             Ok(_) => return Ok(()),
@@ -132,16 +147,28 @@ async fn install_neovim(
                         output.stderr
                     ));
                 }
-                step.set_completed(Some("glibc incompatible, falling back to source build".into()));
+                step.set_completed(Some(
+                    "glibc incompatible, falling back to source build".into(),
+                ));
             }
         }
     }
     install_neovim_from_source(logger, config, dc).await
 }
 
-async fn install_neovim_from_binary(logger: &Logger<'_>, config: &Config, dc: &DevContainer) -> Result<()> {
+async fn install_neovim_from_binary(
+    logger: &Logger<'_>,
+    config: &Config,
+    dc: &DevContainer,
+) -> Result<()> {
     let arch = dc
-        .exec_capturing_stdout(logger, "Querying", "system architecture", &["uname", "-m"], RootMode::No)
+        .exec_capturing_stdout(
+            logger,
+            "Querying",
+            "system architecture",
+            &["uname", "-m"],
+            RootMode::No,
+        )
         .await
         .wrap_err("failed to determine system architecture")?
         .trim()
@@ -159,7 +186,8 @@ async fn install_neovim_from_binary(logger: &Logger<'_>, config: &Config, dc: &D
 
     dc.exec(
         logger,
-        "Installing", "Neovim from binary",
+        "Installing",
+        "Neovim from binary",
         &[
             "sh",
             "-c",
@@ -180,7 +208,11 @@ async fn install_neovim_from_binary(logger: &Logger<'_>, config: &Config, dc: &D
     Ok(())
 }
 
-async fn install_neovim_from_source(logger: &Logger<'_>, config: &Config, dc: &DevContainer) -> Result<()> {
+async fn install_neovim_from_source(
+    logger: &Logger<'_>,
+    config: &Config,
+    dc: &DevContainer,
+) -> Result<()> {
     // Install source build dependencies
     let source_deps = vec![
         "python3-pip",
@@ -200,7 +232,8 @@ async fn install_neovim_from_source(logger: &Logger<'_>, config: &Config, dc: &D
 
     dc.exec(
         logger,
-        "Installing", "Neovim source build dependencies",
+        "Installing",
+        "Neovim source build dependencies",
         &[
             "sh",
             "-c",
@@ -228,19 +261,34 @@ async fn install_neovim_from_source(logger: &Logger<'_>, config: &Config, dc: &D
         neovim_version = neovim_version
     );
 
-    dc.exec(logger, "Building", "Neovim from source", &["sh", "-c", &build_cmd], RootMode::No).await?;
+    dc.exec(
+        logger,
+        "Building",
+        "Neovim from source",
+        &["sh", "-c", &build_cmd],
+        RootMode::No,
+    )
+    .await?;
 
     // Install as root
     dc.exec(
         logger,
-        "Installing", "Neovim build artifacts",
+        "Installing",
+        "Neovim build artifacts",
         &["sh", "-c", "cd /tmp/neovim && make install"],
         RootMode::Yes,
     )
     .await?;
 
     // Cleanup
-    dc.exec(logger, "Cleaning", "Neovim build directory", &["rm", "-rf", "/tmp/neovim"], RootMode::No).await?;
+    dc.exec(
+        logger,
+        "Cleaning",
+        "Neovim build directory",
+        &["rm", "-rf", "/tmp/neovim"],
+        RootMode::No,
+    )
+    .await?;
 
     Ok(())
 }
@@ -257,7 +305,9 @@ async fn setup_github_cli(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> 
     async fn install<'a>(logger: &Logger<'a>, dc: &DevContainer) -> Result<()> {
         // Check if gh is already installed
         {
-            let args = dc.make_exec_args(&["~/.local/bin/gh", "--version"], RootMode::No);
+            let args = dc
+                .make_exec_args(logger, &["~/.local/bin/gh", "--version"], RootMode::No)
+                .await?;
             let mut step = logger.step("Checking", "GitHub CLI version");
             if exec::run_capturing_stdout(&mut step, &args).await.is_ok() {
                 return Ok(());
@@ -266,7 +316,13 @@ async fn setup_github_cli(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> 
         }
 
         let arch = dc
-            .exec_capturing_stdout(logger, "Querying", "system architecture", &["uname", "-m"], RootMode::No)
+            .exec_capturing_stdout(
+                logger,
+                "Querying",
+                "system architecture",
+                &["uname", "-m"],
+                RootMode::No,
+            )
             .await
             .wrap_err("failed to determine system architecture")?
             .trim()
@@ -278,13 +334,18 @@ async fn setup_github_cli(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> 
         };
 
         // Get the latest release version from GitHub API on host machine
-        let api_response = logger.capturing_stdout("Querying", "latest GitHub CLI release", &[
-            "curl",
-            "-s",
-            "https://api.github.com/repos/cli/cli/releases/latest",
-        ])
-        .await
-        .wrap_err("failed to get latest gh CLI version from GitHub API")?;
+        let api_response = logger
+            .capturing_stdout(
+                "Querying",
+                "latest GitHub CLI release",
+                &[
+                    "curl",
+                    "-s",
+                    "https://api.github.com/repos/cli/cli/releases/latest",
+                ],
+            )
+            .await
+            .wrap_err("failed to get latest gh CLI version from GitHub API")?;
 
         let api_json: serde_json::Value = serde_json::from_str(&api_response)
             .into_diagnostic()
@@ -304,7 +365,8 @@ async fn setup_github_cli(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> 
 
         dc.exec(
             logger,
-            "Installing", "GitHub CLI",
+            "Installing",
+            "GitHub CLI",
             &[
                 "sh",
                 "-c",
@@ -329,10 +391,13 @@ async fn setup_github_cli(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> 
     }
 
     async fn login<'a>(logger: &Logger<'a>, dc: &DevContainer) -> Result<()> {
-        let token = logger.capturing_stdout("Querying", "GitHub auth token", &["gh", "auth", "token"]).await?;
+        let token = logger
+            .capturing_stdout("Querying", "GitHub auth token", &["gh", "auth", "token"])
+            .await?;
         dc.exec_with_bytes_stdin(
             logger,
-            "Logging in", "to GitHub CLI",
+            "Logging in",
+            "to GitHub CLI",
             &["sh", "-c", "~/.local/bin/gh auth login --with-token"],
             token.trim().as_bytes(),
             RootMode::No,
@@ -371,7 +436,8 @@ async fn copy_copilot(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> {
 async fn prepare_opt_dir(logger: &Logger<'_>, dc: &DevContainer, owner_user: &str) -> Result<()> {
     dc.exec(
         logger,
-        "Preparing", "/opt directory",
+        "Preparing",
+        "/opt directory",
         &[
             "sh",
             "-c",
@@ -393,7 +459,8 @@ async fn prepare_opt_dir(logger: &Logger<'_>, dc: &DevContainer, owner_user: &st
 async fn install_dotfiles(logger: &Logger<'_>, config: &Config, dc: &DevContainer) -> Result<()> {
     dc.exec(
         logger,
-        "Deploying", "dotfiles",
+        "Deploying",
+        "dotfiles",
         &[
             "sh",
             "-c",

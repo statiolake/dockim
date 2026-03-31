@@ -14,10 +14,7 @@ use tar;
 use tempfile::{NamedTempFile, TempPath};
 use tokio::{net::TcpListener, process::Child, sync::Mutex};
 
-use crate::{
-    exec::ExecOutput,
-    progress::Logger,
-};
+use crate::{exec::ExecOutput, progress::Logger};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpOutput {
@@ -78,7 +75,12 @@ impl RootMode {
 
 impl DevContainer {
     pub async fn is_cli_installed(logger: &Logger<'_>) -> bool {
-        logger.capturing_stdout("Checking", "devcontainer CLI version", &[&*Self::devcontainer_command(), "--version"])
+        logger
+            .capturing_stdout(
+                "Checking",
+                "devcontainer CLI version",
+                &[&*Self::devcontainer_command(), "--version"],
+            )
             .await
             .is_ok()
     }
@@ -96,7 +98,7 @@ impl DevContainer {
     }
 
     pub async fn up(&self, logger: &Logger<'_>, rebuild: bool, build_no_cache: bool) -> Result<()> {
-        let mut args = self.make_args(RootMode::No, "up");
+        let mut args = self.make_args("up");
 
         if rebuild {
             args.push("--remove-existing-container".into());
@@ -115,7 +117,8 @@ impl DevContainer {
 
         self.enable_host_docker_internal_in_rancher_desktop_on_lima(logger)
             .await?;
-        self.enable_host_docker_internal_in_linux_dockerd(logger).await?;
+        self.enable_host_docker_internal_in_linux_dockerd(logger)
+            .await?;
 
         Ok(())
     }
@@ -131,16 +134,13 @@ impl DevContainer {
 
         // Find container by devcontainer labels (more reliable than compose project name)
         let filters = self.devcontainer_label_filters();
-        let mut args = vec![
-            "docker".to_string(),
-            "ps".to_string(),
-            "-q".to_string(),
-        ];
+        let mut args = vec!["docker".to_string(), "ps".to_string(), "-q".to_string()];
         for filter in &filters {
             args.push("--filter".to_string());
             args.push(filter.clone());
         }
-        let output = logger.capturing_stdout("Querying", "devcontainer ID", &args)
+        let output = logger
+            .capturing_stdout("Querying", "devcontainer ID", &args)
             .await
             .wrap_err("failed to find devcontainer")?;
 
@@ -162,13 +162,14 @@ impl DevContainer {
         let remote_user = if let Some(user) = devcontainer_json["remoteUser"].as_str() {
             user.to_string()
         } else {
-            let user_output = logger.capturing_stdout(
-                "Querying",
-                "container remote user",
-                &["docker", "exec", &container_id, "whoami"],
-            )
-            .await
-            .unwrap_or_else(|_| "root".to_string());
+            let user_output = logger
+                .capturing_stdout(
+                    "Querying",
+                    "container remote user",
+                    &["docker", "exec", &container_id, "whoami"],
+                )
+                .await
+                .unwrap_or_else(|_| "root".to_string());
             user_output.trim().to_string()
         };
 
@@ -241,7 +242,8 @@ impl DevContainer {
         args.push("--format".to_string());
         args.push("{{.ID}}".to_string());
 
-        let output = logger.capturing_stdout("Querying", "container IDs", &args)
+        let output = logger
+            .capturing_stdout("Querying", "container IDs", &args)
             .await
             .wrap_err("failed to list containers")?;
 
@@ -264,7 +266,8 @@ impl DevContainer {
                 .to_string(),
         );
 
-        let output = logger.capturing_stdout("Listing", "containers by filters", &args)
+        let output = logger
+            .capturing_stdout("Listing", "containers by filters", &args)
             .await
             .wrap_err("failed to list containers")?;
 
@@ -293,7 +296,11 @@ impl DevContainer {
             .collect())
     }
 
-    async fn list_containers_by_ids(&self, logger: &Logger<'_>, ids: &[String]) -> Result<Vec<ComposeContainerInfo>> {
+    async fn list_containers_by_ids(
+        &self,
+        logger: &Logger<'_>,
+        ids: &[String],
+    ) -> Result<Vec<ComposeContainerInfo>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -309,7 +316,8 @@ impl DevContainer {
                 .to_string(),
         );
 
-        let output = logger.capturing_stdout("Listing", "containers by IDs", &args)
+        let output = logger
+            .capturing_stdout("Listing", "containers by IDs", &args)
             .await
             .wrap_err("failed to list containers")?;
 
@@ -338,29 +346,46 @@ impl DevContainer {
             .collect())
     }
 
-    async fn container_has_config_file_label(&self, logger: &Logger<'_>, container_id: &str) -> Result<bool> {
-        let output = logger.capturing_stdout("Inspecting", "container labels", &[
-            "docker",
-            "inspect",
-            "--format",
-            "{{index .Config.Labels \"devcontainer.config_file\"}}",
-            container_id,
-        ])
-        .await
-        .wrap_err("failed to inspect container labels")?;
+    async fn container_has_config_file_label(
+        &self,
+        logger: &Logger<'_>,
+        container_id: &str,
+    ) -> Result<bool> {
+        let output = logger
+            .capturing_stdout(
+                "Inspecting",
+                "container labels",
+                &[
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{index .Config.Labels \"devcontainer.config_file\"}}",
+                    container_id,
+                ],
+            )
+            .await
+            .wrap_err("failed to inspect container labels")?;
 
         let value = output.trim();
         Ok(!value.is_empty() && value != "<no value>")
     }
 
     /// Find containers belonging to a compose project
-    async fn find_compose_containers(&self, logger: &Logger<'_>, project_name: &str) -> Result<Vec<String>> {
+    async fn find_compose_containers(
+        &self,
+        logger: &Logger<'_>,
+        project_name: &str,
+    ) -> Result<Vec<String>> {
         let project_filter = format!("label=com.docker.compose.project={project_name}");
         self.find_containers_by_filters(logger, &[project_filter], true)
             .await
     }
 
-    async fn find_non_compose_containers(&self, logger: &Logger<'_>, all: bool) -> Result<Vec<String>> {
+    async fn find_non_compose_containers(
+        &self,
+        logger: &Logger<'_>,
+        all: bool,
+    ) -> Result<Vec<String>> {
         let new_label_containers = self
             .find_containers_by_filters(logger, &self.devcontainer_label_filters(), all)
             .await
@@ -400,10 +425,14 @@ impl DevContainer {
         project_name: &str,
     ) -> Result<Vec<ComposeContainerInfo>> {
         let project_filter = format!("label=com.docker.compose.project={project_name}");
-        self.list_containers_by_filters(logger, &[project_filter]).await
+        self.list_containers_by_filters(logger, &[project_filter])
+            .await
     }
 
-    pub async fn list_non_compose_containers(&self, logger: &Logger<'_>) -> Result<Vec<ComposeContainerInfo>> {
+    pub async fn list_non_compose_containers(
+        &self,
+        logger: &Logger<'_>,
+    ) -> Result<Vec<ComposeContainerInfo>> {
         let container_ids = self.find_non_compose_containers(logger, true).await?;
         self.list_containers_by_ids(logger, &container_ids).await
     }
@@ -412,23 +441,41 @@ impl DevContainer {
         if let Some(project_name) = self.get_compose_project_name().await? {
             let containers = self.find_compose_containers(logger, &project_name).await?;
             if containers.is_empty() {
-                logger.log("Info", &format!("No running containers found for compose project '{}'", project_name));
+                logger.log(
+                    "Info",
+                    &format!(
+                        "No running containers found for compose project '{}'",
+                        project_name
+                    ),
+                );
                 return Ok(());
             }
 
-            logger.exec("Stopping", "docker compose stack", &["docker", "compose", "-p", &project_name, "stop"])
+            logger
+                .exec(
+                    "Stopping",
+                    "docker compose stack",
+                    &["docker", "compose", "-p", &project_name, "stop"],
+                )
                 .await
                 .wrap_err("failed to stop docker compose stack")?;
         } else {
             let containers = self.find_non_compose_containers(logger, false).await?;
             if containers.is_empty() {
-                logger.log("Info", &format!("No running containers found for config '{}'", self.config_path.display()));
+                logger.log(
+                    "Info",
+                    &format!(
+                        "No running containers found for config '{}'",
+                        self.config_path.display()
+                    ),
+                );
                 return Ok(());
             }
 
             let mut args = vec!["docker".to_string(), "stop".to_string()];
             args.extend(containers);
-            logger.exec("Stopping", "devcontainer containers", &args)
+            logger
+                .exec("Stopping", "devcontainer containers", &args)
                 .await
                 .wrap_err("failed to stop devcontainer container(s)")?;
         }
@@ -442,23 +489,38 @@ impl DevContainer {
         if let Some(project_name) = self.get_compose_project_name().await? {
             let containers = self.find_compose_containers(logger, &project_name).await?;
             if containers.is_empty() {
-                logger.log("Info", &format!("No containers found for compose project '{}'", project_name));
+                logger.log(
+                    "Info",
+                    &format!("No containers found for compose project '{}'", project_name),
+                );
                 return Ok(());
             }
 
-            logger.exec("Removing", "docker compose stack", &["docker", "compose", "-p", &project_name, "down"])
+            logger
+                .exec(
+                    "Removing",
+                    "docker compose stack",
+                    &["docker", "compose", "-p", &project_name, "down"],
+                )
                 .await
                 .wrap_err("failed to down docker compose stack")?;
         } else {
             let containers = self.find_non_compose_containers(logger, true).await?;
             if containers.is_empty() {
-                logger.log("Info", &format!("No containers found for config '{}'", self.config_path.display()));
+                logger.log(
+                    "Info",
+                    &format!(
+                        "No containers found for config '{}'",
+                        self.config_path.display()
+                    ),
+                );
                 return Ok(());
             }
 
             let mut args = vec!["docker".to_string(), "rm".to_string(), "-f".to_string()];
             args.extend(containers);
-            logger.exec("Removing", "devcontainer containers", &args)
+            logger
+                .exec("Removing", "devcontainer containers", &args)
                 .await
                 .wrap_err("failed to remove devcontainer container(s)")?;
         }
@@ -466,6 +528,34 @@ impl DevContainer {
         // Clear cache after removing container
         *self.cached_up_output.lock().await = None;
         Ok(())
+    }
+
+    /// Build `docker exec -u <user> -w <workspace> <container_id>` prefix args.
+    async fn make_docker_exec_args(
+        &self,
+        logger: &Logger<'_>,
+        root_mode: RootMode,
+    ) -> Result<Vec<String>> {
+        let info = self
+            .inspect(logger)
+            .await
+            .wrap_err("failed to get devcontainer status")?;
+
+        let user = if root_mode.is_required() {
+            "root".to_string()
+        } else {
+            info.remote_user.clone()
+        };
+
+        Ok(vec![
+            "docker".to_string(),
+            "exec".to_string(),
+            "-u".to_string(),
+            user,
+            "-w".to_string(),
+            info.remote_workspace_folder.clone(),
+            info.container_id.clone(),
+        ])
     }
 
     pub async fn spawn<S: AsRef<str>>(
@@ -476,7 +566,7 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<Child> {
-        let mut args = self.make_args(root_mode, "exec");
+        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         logger.spawn(verb, desc, &args).await
@@ -490,7 +580,7 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<()> {
-        let mut args = self.make_args(root_mode, "exec");
+        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         logger.exec(verb, desc, &args).await
@@ -498,7 +588,7 @@ impl DevContainer {
 
     /// Execute a foreground interactive process that owns the TTY (bash, shell, neovim, …).
     ///
-    /// Always inherits stdout/stderr regardless of suppression state.
+    /// Uses `docker exec -it` directly to guarantee PTY allocation.
     pub async fn exec_interactive<S: AsRef<str>>(
         &self,
         logger: &Logger<'_>,
@@ -507,7 +597,9 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<()> {
-        let mut args = self.make_args(root_mode, "exec");
+        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
+        // Insert -it after "docker exec" for PTY allocation
+        args.insert(2, "-it".to_string());
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         logger.exec_interactive(verb, desc, &args).await
@@ -521,7 +613,7 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<String> {
-        let mut args = self.make_args(root_mode, "exec");
+        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         logger.capturing_stdout(verb, desc, &args).await
@@ -535,7 +627,13 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<ExecOutput, ExecOutput> {
-        let mut args = self.make_args(root_mode, "exec");
+        let mut args = self
+            .make_docker_exec_args(logger, root_mode)
+            .await
+            .map_err(|e| ExecOutput {
+                stdout: String::new(),
+                stderr: e.to_string(),
+            })?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         logger.capturing(verb, desc, &args).await
@@ -550,7 +648,7 @@ impl DevContainer {
         stdin: Stdio,
         root_mode: RootMode,
     ) -> Result<()> {
-        let mut args = self.make_args(root_mode, "exec");
+        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         logger.with_stdin(verb, desc, &args, stdin).await
@@ -565,7 +663,7 @@ impl DevContainer {
         stdin: &[u8],
         root_mode: RootMode,
     ) -> Result<()> {
-        let mut args = self.make_args(root_mode, "exec");
+        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         logger.with_bytes_stdin(verb, desc, &args, stdin).await
@@ -601,9 +699,16 @@ impl DevContainer {
             let tar_data = Self::create_tar_archive(&root_files).await?;
 
             // Extract tar in container
-            self.exec_with_bytes_stdin(logger, "Copying", "files to container root", &["tar", "-xf", "-", "-C", "/"], &tar_data, root_mode)
-                .await
-                .wrap_err("failed to extract tar archive in container")?;
+            self.exec_with_bytes_stdin(
+                logger,
+                "Copying",
+                "files to container root",
+                &["tar", "-xf", "-", "-C", "/"],
+                &tar_data,
+                root_mode,
+            )
+            .await
+            .wrap_err("failed to extract tar archive in container")?;
         }
 
         // Copy home files if any
@@ -612,9 +717,16 @@ impl DevContainer {
 
             // Extract tar in container home directory
             // We need to wrap command with 'sh -c' to expand $HOME variable
-            self.exec_with_bytes_stdin(logger, "Copying", "files to container home", &["sh", "-c", "tar -xf - -C $HOME"], &tar_data, root_mode)
-                .await
-                .wrap_err("failed to extract tar archive to home directory in container")?;
+            self.exec_with_bytes_stdin(
+                logger,
+                "Copying",
+                "files to container home",
+                &["sh", "-c", "tar -xf - -C $HOME"],
+                &tar_data,
+                root_mode,
+            )
+            .await
+            .wrap_err("failed to extract tar archive to home directory in container")?;
         }
 
         Ok(())
@@ -684,7 +796,8 @@ impl DevContainer {
         let output = self
             .exec_capturing_stdout(
                 logger,
-                "Detecting", "listening ports",
+                "Detecting",
+                "listening ports",
                 &[
                     "sh",
                     "-c",
@@ -720,41 +833,31 @@ impl DevContainer {
     }
 
     /// Build devcontainer exec args for manual step patterns.
-    pub fn make_exec_args<S: AsRef<str>>(&self, command: &[S], root_mode: RootMode) -> Vec<String> {
-        let mut args = self.make_args(root_mode, "exec");
+    pub async fn make_exec_args<S: AsRef<str>>(
+        &self,
+        logger: &Logger<'_>,
+        command: &[S],
+        root_mode: RootMode,
+    ) -> Result<Vec<String>> {
+        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
-        args
+        Ok(args)
     }
 
-    fn make_args(&self, root_mode: RootMode, subcommand: &str) -> Vec<String> {
-        let mut args = vec![
+    fn make_args(&self, subcommand: &str) -> Vec<String> {
+        vec![
             Self::devcontainer_command(),
             subcommand.to_string(),
             "--workspace-folder".to_string(),
             self.workspace_folder.to_string_lossy().to_string(),
             "--config".to_string(),
             self.config_path.to_string_lossy().to_string(),
-        ];
-
-        if root_mode.is_required() {
-            args.push("--override-config".to_string());
-            args.push(
-                self.overriden_config_paths
-                    .root_devcontainer_json
-                    .to_string_lossy()
-                    .to_string(),
-            );
-        } else {
-            args.push("--override-config".to_string());
-            args.push(
-                self.overriden_config_paths
-                    .devcontainer_json
-                    .to_string_lossy()
-                    .to_string(),
-            );
-        }
-
-        args
+            "--override-config".to_string(),
+            self.overriden_config_paths
+                .devcontainer_json
+                .to_string_lossy()
+                .to_string(),
+        ]
     }
 
     fn devcontainer_command() -> String {
@@ -765,13 +868,25 @@ impl DevContainer {
         }
     }
 
-    async fn enable_host_docker_internal_in_rancher_desktop_on_lima(&self, logger: &Logger<'_>) -> Result<()> {
-        if logger.exec("Checking", "Rancher Desktop", &["rdctl", "version"]).await.is_err() {
+    async fn enable_host_docker_internal_in_rancher_desktop_on_lima(
+        &self,
+        logger: &Logger<'_>,
+    ) -> Result<()> {
+        if logger
+            .exec("Checking", "Rancher Desktop", &["rdctl", "version"])
+            .await
+            .is_err()
+        {
             return Ok(());
         }
 
         let host_ip_addr = {
-            let vm_hosts = logger.capturing_stdout("Reading", "Rancher Desktop VM hosts", &["rdctl", "shell", "cat", "/etc/hosts"])
+            let vm_hosts = logger
+                .capturing_stdout(
+                    "Reading",
+                    "Rancher Desktop VM hosts",
+                    &["rdctl", "shell", "cat", "/etc/hosts"],
+                )
                 .await
                 .wrap_err("failed to read /etc/hosts on Rancher Desktop VM")?;
             let Some(ip_addr) = vm_hosts.lines().find_map(|line| {
@@ -792,7 +907,8 @@ impl DevContainer {
         let _ = self
             .exec(
                 logger,
-                "Modifying", "container /etc/hosts for Rancher Desktop",
+                "Modifying",
+                "container /etc/hosts for Rancher Desktop",
                 &[
                     "sh",
                     "-c",
@@ -813,14 +929,23 @@ impl DevContainer {
         Ok(())
     }
 
-    async fn enable_host_docker_internal_in_linux_dockerd(&self, logger: &Logger<'_>) -> Result<()> {
+    async fn enable_host_docker_internal_in_linux_dockerd(
+        &self,
+        logger: &Logger<'_>,
+    ) -> Result<()> {
         // Check if we're running on Linux
         if !cfg!(target_os = "linux") {
             return Ok(());
         }
 
         let container_hosts = self
-            .exec_capturing_stdout(logger, "Reading", "container /etc/hosts", &["cat", "/etc/hosts"], RootMode::No)
+            .exec_capturing_stdout(
+                logger,
+                "Reading",
+                "container /etc/hosts",
+                &["cat", "/etc/hosts"],
+                RootMode::No,
+            )
             .await
             .wrap_err("failed to read /etc/hosts")?;
 
@@ -832,7 +957,8 @@ impl DevContainer {
         let host_ip_addr = self
             .exec_capturing_stdout(
                 logger,
-                "Querying", "default gateway IP",
+                "Querying",
+                "default gateway IP",
                 &["sh", "-c", "ip route | grep default | cut -d' ' -f3"],
                 RootMode::No,
             )
@@ -842,7 +968,8 @@ impl DevContainer {
 
         self.exec(
             logger,
-            "Modifying", "container /etc/hosts for Linux",
+            "Modifying",
+            "container /etc/hosts for Linux",
             &[
                 "sh",
                 "-c",
@@ -859,21 +986,18 @@ impl DevContainer {
 #[derive(Debug)]
 struct OverridenConfigPaths {
     devcontainer_json: TempPath,
-    root_devcontainer_json: TempPath,
     // We need to store the instance of overriden compose.yaml during the lifetime of
-    // devcontaier.json. If we don't, the file will be deleted as in RAII mechanism while still
+    // devcontainer.json. If we don't, the file will be deleted as in RAII mechanism while still
     // referenced by devcontainer.json.
     _compose_yaml: Option<TempPath>,
 }
 
 /// Generate override config file contents to achieve various useful features:
-/// - Root user execution in container without sudo installation
 /// - host.docker.internal on Linux
 async fn generate_overriden_config_paths(
     workspace_folder: &Path,
     config_path: &Path,
 ) -> Result<OverridenConfigPaths> {
-    // devcontainer.json
     let compose_yaml = generate_overriden_compose_yaml(workspace_folder, config_path)
         .await
         .wrap_err("failed to generate temporary docker-compose overrides")?
@@ -882,14 +1006,9 @@ async fn generate_overriden_config_paths(
         generate_overriden_devcontainer_json(config_path, compose_yaml.as_ref())
             .wrap_err("failed to generate temporary devcontainer overrides")?
             .into_temp_path();
-    let root_devcontainer_json =
-        generate_overriden_root_devcontainer_json(config_path, compose_yaml.as_ref())
-            .wrap_err("failed to generate temporary devcontainer overrides")?
-            .into_temp_path();
 
     Ok(OverridenConfigPaths {
         devcontainer_json,
-        root_devcontainer_json,
         _compose_yaml: compose_yaml,
     })
 }
@@ -1086,11 +1205,6 @@ fn update_host_docker_internal_devcontainer_json_value(value: &mut Value) {
     value["runArgs"] = Value::Array(run_args);
 }
 
-fn update_root_devcontainer_json_value(value: &mut Value) {
-    // Override remoteUser to root
-    value["remoteUser"] = "root".into();
-}
-
 fn update_compose_files(value: &mut Value, compose_yaml: Option<&TempPath>) {
     let Some(compose_yaml) = compose_yaml else {
         return;
@@ -1117,33 +1231,6 @@ fn generate_overriden_devcontainer_json(
         load_devcontainer_json(config_path).wrap_err("failed to load devcontainer.json")?;
 
     update_host_docker_internal_devcontainer_json_value(&mut value);
-    update_compose_files(&mut value, compose_yaml);
-
-    let mut overriden_file =
-        NamedTempFile::new().expect("failed to create temp file for overriding remote user");
-
-    overriden_file
-        .write_all(
-            serde_json::to_string(&value)
-                .into_diagnostic()
-                .wrap_err("failed to format config")?
-                .as_bytes(),
-        )
-        .into_diagnostic()
-        .wrap_err("failed to write to override config")?;
-
-    Ok(overriden_file)
-}
-
-fn generate_overriden_root_devcontainer_json(
-    config_path: &Path,
-    compose_yaml: Option<&TempPath>,
-) -> Result<NamedTempFile> {
-    let mut value =
-        load_devcontainer_json(config_path).wrap_err("failed to load devcontainer.json")?;
-
-    update_host_docker_internal_devcontainer_json_value(&mut value);
-    update_root_devcontainer_json_value(&mut value);
     update_compose_files(&mut value, compose_yaml);
 
     let mut overriden_file =
@@ -1235,7 +1322,8 @@ fn make_docker_compose_args(compose_paths: &[PathBuf], tail_args: &[&str]) -> Ve
 async fn get_compose_project_name_from_docker(compose_paths: &[PathBuf]) -> Result<Option<String>> {
     let logger = crate::progress::root_logger();
     let args = make_docker_compose_args(compose_paths, &["config", "--format", "json"]);
-    let output = logger.capturing_stdout("Querying", "compose project name", &args)
+    let output = logger
+        .capturing_stdout("Querying", "compose project name", &args)
         .await
         .wrap_err("failed to read compose project name via docker compose config")?;
 
@@ -1249,7 +1337,8 @@ async fn get_compose_project_name_from_docker(compose_paths: &[PathBuf]) -> Resu
 async fn resolve_compose_service_names(compose_paths: &[PathBuf]) -> Result<Vec<String>> {
     let logger = crate::progress::root_logger();
     let args = make_docker_compose_args(compose_paths, &["config", "--services"]);
-    let output = logger.capturing_stdout("Querying", "compose service names", &args)
+    let output = logger
+        .capturing_stdout("Querying", "compose service names", &args)
         .await
         .wrap_err("failed to read compose services via docker compose config")?;
 

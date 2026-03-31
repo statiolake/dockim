@@ -18,7 +18,10 @@ pub async fn main(
     update_docker_config(&docker_config_dir)?;
 
     logger.write("Docker configuration updated to enable Ctrl+P support");
-    logger.write(&format!("Docker config location: {}", docker_config_dir.display()));
+    logger.write(&format!(
+        "Docker config location: {}",
+        docker_config_dir.display()
+    ));
 
     Ok(())
 }

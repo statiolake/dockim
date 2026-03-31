@@ -33,7 +33,13 @@ pub async fn main(
 
     // Check if Neovim is installed, if not, run build first
     if dc
-        .exec_capturing_stdout(logger, "Checking", "Neovim version", &["/usr/local/bin/nvim", "--version"], RootMode::No)
+        .exec_capturing_stdout(
+            logger,
+            "Checking",
+            "Neovim version",
+            &["/usr/local/bin/nvim", "--version"],
+            RootMode::No,
+        )
         .await
         .is_err()
     {
@@ -54,9 +60,11 @@ pub async fn main(
     let mut cmd_args = vec![&*config.shell];
     cmd_args.extend(shell_args.args.iter().map(|s| s.as_str()));
     let _suppress = SuppressGuard::new();
-    dc.exec_interactive(logger, "Running", "shell", &cmd_args, RootMode::No).await.wrap_err(miette!(
-        help = "try `dockim build --rebuild` first",
-        "failed to execute `{}` on the container",
-        config.shell
-    ))
+    dc.exec_interactive(logger, "Running", "shell", &cmd_args, RootMode::No)
+        .await
+        .wrap_err(miette!(
+            help = "try `dockim build --rebuild` first",
+            "failed to execute `{}` on the container",
+            config.shell
+        ))
 }

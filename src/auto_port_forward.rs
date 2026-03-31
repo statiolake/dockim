@@ -34,7 +34,14 @@ impl AutoPortForwarder {
         let console = logger.console().clone();
         let verbose = logger.verbose();
 
-        join_set.spawn(run_auto_forward(dc, manager, shutdown_rx, exclude_ports, console, verbose));
+        join_set.spawn(run_auto_forward(
+            dc,
+            manager,
+            shutdown_rx,
+            exclude_ports,
+            console,
+            verbose,
+        ));
 
         Self {
             shutdown_tx: std::sync::Mutex::new(Some(shutdown_tx)),
@@ -90,18 +97,24 @@ async fn run_auto_forward(
 
             let host_port = choose_host_port(container_port, &dc).await;
             match manager
-                .forward_port(
-                    &host_port.to_string(),
-                    &container_port.to_string(),
-                )
+                .forward_port(&host_port.to_string(), &container_port.to_string())
                 .await
             {
                 Ok(guard) => {
-                    logger.log("AutoForward", &format!("container port {} -> host port {}", container_port, host_port));
+                    logger.log(
+                        "AutoForward",
+                        &format!(
+                            "container port {} -> host port {}",
+                            container_port, host_port
+                        ),
+                    );
                     forwarded.insert(container_port, (host_port, guard));
                 }
                 Err(e) => {
-                    logger.log("AutoForward", &format!("failed to forward container port {}: {}", container_port, e));
+                    logger.log(
+                        "AutoForward",
+                        &format!("failed to forward container port {}: {}", container_port, e),
+                    );
                 }
             }
         }
@@ -115,7 +128,13 @@ async fn run_auto_forward(
         for container_port in closed_ports {
             if let Some((host_port, _guard)) = forwarded.remove(&container_port) {
                 // _guard is dropped here, which sends a stop message to the manager
-                logger.log("AutoForward", &format!("container port {} (host {}) closed, stopping forward", container_port, host_port));
+                logger.log(
+                    "AutoForward",
+                    &format!(
+                        "container port {} (host {}) closed, stopping forward",
+                        container_port, host_port
+                    ),
+                );
             }
         }
     }

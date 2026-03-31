@@ -46,17 +46,27 @@ pub async fn main(
     }
 }
 
-async fn add_port(logger: &Logger<'_>, forwarder: &PortForwarder, add_args: &PortAddArgs) -> Result<()> {
+async fn add_port(
+    logger: &Logger<'_>,
+    forwarder: &PortForwarder,
+    add_args: &PortAddArgs,
+) -> Result<()> {
     let (host_port, container_port) = parse_port_descriptor(&add_args.port_descriptor)?;
 
     // We need to forget because forward_port() returns a guard that will stop forwarding on drop
     mem::forget(forwarder.forward_port(host_port, container_port).await?);
 
-    logger.write(&format!("Port forwarding started: {host_port}:{container_port}"));
+    logger.write(&format!(
+        "Port forwarding started: {host_port}:{container_port}"
+    ));
     Ok(())
 }
 
-async fn remove_port(logger: &Logger<'_>, forwarder: &PortForwarder, rm_args: &PortRmArgs) -> Result<()> {
+async fn remove_port(
+    logger: &Logger<'_>,
+    forwarder: &PortForwarder,
+    rm_args: &PortRmArgs,
+) -> Result<()> {
     if rm_args.all {
         forwarder.remove_all_forwarded_ports().await?;
         logger.write("All port forwards removed");

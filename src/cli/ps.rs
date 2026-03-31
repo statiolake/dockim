@@ -8,7 +8,12 @@ use crate::{
 
 use super::{Args, PsArgs};
 
-pub async fn main(logger: &Logger<'_>, _config: &Config, args: &Args, _ps_args: &PsArgs) -> Result<()> {
+pub async fn main(
+    logger: &Logger<'_>,
+    _config: &Config,
+    args: &Args,
+    _ps_args: &PsArgs,
+) -> Result<()> {
     let workspace_folder = args.resolve_workspace_folder()?;
     let config_path = args.resolve_config_path()?;
 
@@ -99,7 +104,11 @@ fn print_containers_table(logger: &Logger<'_>, containers: &[ComposeContainerInf
     }
 }
 
-fn print_configuration(logger: &Logger<'_>, workspace_folder: &std::path::Path, config_path: &std::path::Path) {
+fn print_configuration(
+    logger: &Logger<'_>,
+    workspace_folder: &std::path::Path,
+    config_path: &std::path::Path,
+) {
     logger.write("Configuration");
     logger.write(&format!("  Workspace: {}", workspace_folder.display()));
     logger.write(&format!("  Config:    {}", config_path.display()));

@@ -36,7 +36,9 @@ async fn main() -> Result<()> {
         Subcommand::Shell(shell_args) => {
             shell::main(&logger, &config, &args, shell_args, &mut join_set).await
         }
-        Subcommand::Bash(bash_args) => bash::main(&logger, &config, &args, bash_args, &mut join_set).await,
+        Subcommand::Bash(bash_args) => {
+            bash::main(&logger, &config, &args, bash_args, &mut join_set).await
+        }
         Subcommand::Exec(exec_args) => {
             cli_exec::main(&logger, &config, &args, exec_args, &mut join_set).await
         }
@@ -48,7 +50,14 @@ async fn main() -> Result<()> {
         Subcommand::Stop(stop_args) => stop::main(&logger, &config, &args, stop_args).await,
         Subcommand::Down(down_args) => down::main(&logger, &config, &args, down_args).await,
         Subcommand::ClipboardServer(clipboard_server_args) => {
-            clipboard_server::main(&logger, &config, &args, clipboard_server_args, &mut join_set).await
+            clipboard_server::main(
+                &logger,
+                &config,
+                &args,
+                clipboard_server_args,
+                &mut join_set,
+            )
+            .await
         }
     };
 

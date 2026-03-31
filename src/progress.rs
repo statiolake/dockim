@@ -1,9 +1,4 @@
-use std::{
-    fmt::Debug,
-    marker::PhantomData,
-    process::Stdio,
-    sync::OnceLock,
-};
+use std::{fmt::Debug, marker::PhantomData, process::Stdio, sync::OnceLock};
 
 use colored::Colorize;
 use miette::Result;
@@ -363,7 +358,8 @@ impl<'a> Drop for Logger<'a> {
             if let Some(ref header) = self.header {
                 if self.verbose {
                     if let Some(ref vl) = header.verbose_line {
-                        self.console.write_line(&format!("{STEP_INDENT}{}", vl.bright_black()));
+                        self.console
+                            .write_line(&format!("{STEP_INDENT}{}", vl.bright_black()));
                     }
                 }
                 if let StepState::Completed(Some(ref summary)) = header.state {

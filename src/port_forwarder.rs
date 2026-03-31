@@ -22,11 +22,7 @@ pub struct PortForwarder {
 }
 
 impl PortForwarder {
-    pub fn new(
-        dc: Arc<DevContainer>,
-        logger: &Logger<'_>,
-        join_set: &mut JoinSet<()>,
-    ) -> Self {
+    pub fn new(dc: Arc<DevContainer>, logger: &Logger<'_>, join_set: &mut JoinSet<()>) -> Self {
         let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<String>();
         let bg_console = logger.console().clone();
         let verbose = logger.verbose();
@@ -243,7 +239,10 @@ impl PortForwarder {
     }
 
     async fn socat_container_name(&self, logger: &Logger<'_>, host_port: &str) -> Result<String> {
-        Ok(format!("{}{host_port}", self.socat_container_name_prefix(logger).await?))
+        Ok(format!(
+            "{}{host_port}",
+            self.socat_container_name_prefix(logger).await?
+        ))
     }
 }
 

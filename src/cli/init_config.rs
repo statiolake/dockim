@@ -26,7 +26,10 @@ pub async fn main(
 
     create_config_template(&config_dir, &config_path)?;
 
-    logger.write(&format!("Created default config file at: {}", config_path.display()));
+    logger.write(&format!(
+        "Created default config file at: {}",
+        config_path.display()
+    ));
     logger.write("Edit this file to customize your dockim settings.");
 
     Ok(())

@@ -4,7 +4,12 @@ use crate::{config::Config, devcontainer::DevContainer, progress::Logger};
 
 use super::{Args, UpArgs};
 
-pub async fn main(logger: &Logger<'_>, _config: &Config, args: &Args, up_args: &UpArgs) -> Result<()> {
+pub async fn main(
+    logger: &Logger<'_>,
+    _config: &Config,
+    args: &Args,
+    up_args: &UpArgs,
+) -> Result<()> {
     let dc = DevContainer::new(
         args.resolve_workspace_folder()?,
         args.resolve_config_path()?,
@@ -12,7 +17,8 @@ pub async fn main(logger: &Logger<'_>, _config: &Config, args: &Args, up_args: &
     .await
     .wrap_err("failed to initialize devcontainer client")?;
 
-    dc.up(logger, up_args.rebuild, up_args.build_no_cache).await?;
+    dc.up(logger, up_args.rebuild, up_args.build_no_cache)
+        .await?;
 
     Ok(())
 }

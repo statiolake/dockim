@@ -36,11 +36,17 @@ pub async fn main(
         AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], logger, join_set);
 
     let _suppress = SuppressGuard::new();
-    dc.exec_interactive(logger, "Running", "command in container", &exec_args.args, RootMode::No)
-        .await
-        .wrap_err(miette!(
-            help = "try `dockim build --rebuild` first",
-            "failed to execute `{:?}` on the container",
-            exec_args.args,
-        ))
+    dc.exec_interactive(
+        logger,
+        "Running",
+        "command in container",
+        &exec_args.args,
+        RootMode::No,
+    )
+    .await
+    .wrap_err(miette!(
+        help = "try `dockim build --rebuild` first",
+        "failed to execute `{:?}` on the container",
+        exec_args.args,
+    ))
 }

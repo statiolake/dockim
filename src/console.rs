@@ -41,15 +41,15 @@ pub fn force_inherit_stdio() -> std::process::Stdio {
     std::process::Stdio::inherit()
 }
 
-/// Run `stty sane` to restore the terminal to a sane state, unless a [`SuppressGuard`] is active.
+/// Run `stty sane` to restore the terminal to a sane state after an interactive process exits.
 ///
-/// Skipped when suppressed because the interactive foreground process owns the TTY at that point;
-/// running `stty sane` from a background task would destroy readline's raw mode.
-pub async fn reset_terminal_if_needed() {
-    if is_suppressed() {
-        return;
-    }
-    let _ = tokio::process::Command::new("stty").arg("sane").status().await;
+/// Only call this from [`exec::run_interactive`] — tail-based execution never touches terminal
+/// modes so it doesn't need a reset.
+pub async fn reset_terminal() {
+    let _ = tokio::process::Command::new("stty")
+        .arg("sane")
+        .status()
+        .await;
 }
 
 use crossterm::{cursor, execute, terminal};

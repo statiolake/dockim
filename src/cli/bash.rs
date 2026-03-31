@@ -32,17 +32,20 @@ pub async fn main(
     dc.up(logger, false, false).await?;
 
     let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger, join_set));
-    let _auto_forwarder = AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], logger, join_set);
+    let _auto_forwarder =
+        AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], logger, join_set);
 
     let mut cmd_args = vec!["bash"];
     cmd_args.extend(shell_args.args.iter().map(|s| s.as_str()));
     let _suppress = SuppressGuard::new();
-    dc.exec_interactive(logger, "Running", "bash", &cmd_args, RootMode::No).await.wrap_err_with(|| {
-        miette!(
-            help = "try `dockim build --rebuild` first",
-            "failed to execute `bash` on the container",
-        )
-    })?;
+    dc.exec_interactive(logger, "Running", "bash", &cmd_args, RootMode::No)
+        .await
+        .wrap_err_with(|| {
+            miette!(
+                help = "try `dockim build --rebuild` first",
+                "failed to execute `bash` on the container",
+            )
+        })?;
 
     Ok(())
 }

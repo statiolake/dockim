@@ -8,16 +8,13 @@ use tokio::{
 use miette::{ensure, IntoDiagnostic, Result, WrapErr};
 
 use crate::{
-    console::{force_inherit_stdio, reset_terminal_if_needed},
+    console::{force_inherit_stdio, reset_terminal},
     progress::Logger,
 };
 
 // --- Low-level functions (take &mut Logger with step header) ---
 
-pub async fn run_spawn<S: AsRef<str> + Debug>(
-    step: &mut Logger<'_>,
-    args: &[S],
-) -> Result<Child> {
+pub async fn run_spawn<S: AsRef<str> + Debug>(step: &mut Logger<'_>, args: &[S]) -> Result<Child> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
     if step.is_verbose() {
@@ -32,6 +29,7 @@ pub async fn run_spawn<S: AsRef<str> + Debug>(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
         .into_diagnostic()
         .wrap_err("spawn failed")
@@ -45,10 +43,7 @@ pub async fn run_spawn<S: AsRef<str> + Debug>(
 }
 
 /// Execute a command with live tail display of stdout/stderr.
-pub async fn run<S: AsRef<str> + Debug>(
-    step: &mut Logger<'_>,
-    args: &[S],
-) -> Result<()> {
+pub async fn run<S: AsRef<str> + Debug>(step: &mut Logger<'_>, args: &[S]) -> Result<()> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
     if step.is_verbose() {
@@ -63,6 +58,9 @@ pub async fn run<S: AsRef<str> + Debug>(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // Detach from the controlling terminal so background processes (e.g. devcontainer
+        // CLI / Node.js) cannot call tcsetattr on it and corrupt an active interactive session.
+        .process_group(0)
         .spawn()
         .into_diagnostic()
         .wrap_err("exec failed")
@@ -137,6 +135,7 @@ pub async fn run_with_stdin<S: AsRef<str> + Debug>(
         .stdin(stdin)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .process_group(0)
         .status()
         .await
         .into_diagnostic()
@@ -179,6 +178,7 @@ pub async fn run_with_bytes_stdin<S: AsRef<str> + Debug>(
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
         .into_diagnostic()
     {
@@ -239,6 +239,7 @@ pub async fn run_capturing_stdout<S: AsRef<str> + Debug>(
 
     let out = match Command::new(command)
         .args(cmd_args.iter().map(|s| s.as_ref()))
+        .process_group(0)
         .output()
         .await
         .into_diagnostic()
@@ -293,6 +294,7 @@ pub async fn run_capturing<S: AsRef<str> + Debug>(
 
     let out = match Command::new(command)
         .args(cmd_args.iter().map(|s| s.as_ref()))
+        .process_group(0)
         .output()
         .await
     {
@@ -364,6 +366,6 @@ pub async fn run_interactive<S: AsRef<str> + Debug>(
 
     ensure!(status.success(), "Command returned non-successful status");
 
-    reset_terminal_if_needed().await;
+    reset_terminal().await;
     Ok(())
 }
