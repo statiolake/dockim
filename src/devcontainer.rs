@@ -3,6 +3,7 @@ use std::{
     io::Write,
     path::{Component, Path, PathBuf},
     process::Stdio,
+    sync::Arc,
 };
 
 use itertools::Itertools;
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tar;
 use tempfile::{NamedTempFile, TempPath};
-use tokio::{net::TcpListener, process::Child, sync::Mutex};
+use tokio::{net::TcpListener, process::Child, runtime::Handle, sync::Mutex, task};
 
 use crate::{exec::ExecOutput, progress::Logger};
 
@@ -51,6 +52,23 @@ pub enum ContainerFileDestination {
     Root(String),
     /// Relative path from user's home directory
     Home(String),
+}
+
+/// RAII guard that stops the container on drop, used when bash/shell/nvim started it themselves.
+pub struct ContainerStopGuard {
+    dc: Arc<DevContainer>,
+}
+
+impl Drop for ContainerStopGuard {
+    fn drop(&mut self) {
+        let dc = Arc::clone(&self.dc);
+        task::block_in_place(|| {
+            Handle::current().block_on(async move {
+                let logger = crate::progress::root_logger();
+                let _ = dc.stop(&logger).await;
+            });
+        });
+    }
 }
 
 #[derive(Debug)]
@@ -95,6 +113,26 @@ impl DevContainer {
             overriden_config_paths: overriden_config,
             cached_up_output: Mutex::new(None),
         })
+    }
+
+    /// Returns true if the container is currently running.
+    pub async fn is_running(&self, logger: &Logger<'_>) -> bool {
+        self.inspect(logger).await.is_ok()
+    }
+
+    /// Starts the container if not already running. Returns a [`ContainerStopGuard`] that stops it
+    /// on drop if we started it, or `None` if it was already running (leave it as-is).
+    pub async fn ensure_running(
+        dc: &Arc<Self>,
+        logger: &Logger<'_>,
+        rebuild: bool,
+        build_no_cache: bool,
+    ) -> Result<Option<ContainerStopGuard>> {
+        if dc.is_running(logger).await {
+            return Ok(None);
+        }
+        dc.up(logger, rebuild, build_no_cache).await?;
+        Ok(Some(ContainerStopGuard { dc: Arc::clone(dc) }))
     }
 
     pub async fn up(&self, logger: &Logger<'_>, rebuild: bool, build_no_cache: bool) -> Result<()> {

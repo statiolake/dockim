@@ -29,7 +29,7 @@ pub async fn main(
         .wrap_err("failed to initialize devcontainer client")?,
     );
 
-    dc.up(logger, false, false).await?;
+    let _stop_guard = DevContainer::ensure_running(&dc, logger, false, false).await?;
 
     let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger, join_set));
     let _auto_forwarder =
@@ -45,7 +45,5 @@ pub async fn main(
                 help = "try `dockim build --rebuild` first",
                 "failed to execute `bash` on the container",
             )
-        })?;
-
-    Ok(())
+        })
 }

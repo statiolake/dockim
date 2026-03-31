@@ -41,7 +41,7 @@ pub async fn main(
         .wrap_err("failed to initialize devcontainer client")?,
     );
 
-    dc.up(logger, false, false).await?;
+    let _stop_guard = DevContainer::ensure_running(&dc, logger, false, false).await?;
 
     // Check if Neovim is installed, if not, run build first
     if dc
@@ -115,6 +115,8 @@ pub async fn main(
 
     // --- Run Neovim ---
 
+    // _auto_forwarder, port_forwarder, clipboard, _stop_guard are dropped here.
+    // Caller's join_set.join_all() waits for all tasks to complete.
     if neovim_args.no_remote_ui {
         run_neovim_directly(logger, &dc, args, clipboard_port).await
     } else {
@@ -128,9 +130,6 @@ pub async fn main(
             }
         }
     }
-
-    // _auto_forwarder, port_forwarder, clipboard are dropped here -> shutdown signals sent.
-    // Caller's join_set.join_all() waits for all tasks to complete.
 }
 
 async fn populate_envs(
