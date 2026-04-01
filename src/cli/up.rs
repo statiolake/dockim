@@ -1,3 +1,5 @@
+use std::{mem, sync::Arc};
+
 use miette::{Context, Result};
 
 use crate::{config::Config, devcontainer::DevContainer, progress::Logger};
@@ -10,15 +12,16 @@ pub async fn main(
     args: &Args,
     up_args: &UpArgs,
 ) -> Result<()> {
-    let dc = DevContainer::new(
-        args.resolve_workspace_folder()?,
-        args.resolve_config_path()?,
-    )
-    .await
-    .wrap_err("failed to initialize devcontainer client")?;
+    let dc = Arc::new(
+        DevContainer::new(
+            args.resolve_workspace_folder()?,
+            args.resolve_config_path()?,
+        )
+        .await
+        .wrap_err("failed to initialize devcontainer client")?,
+    );
 
-    dc.up(logger, up_args.rebuild, up_args.build_no_cache)
-        .await?;
+    mem::forget(dc.up(logger, up_args.rebuild, up_args.build_no_cache).await?);
 
     Ok(())
 }

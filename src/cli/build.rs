@@ -1,3 +1,5 @@
+use std::{mem, sync::Arc};
+
 use itertools::Itertools;
 use miette::{miette, IntoDiagnostic, Result, WrapErr};
 
@@ -15,15 +17,16 @@ pub async fn main(
     args: &Args,
     build_args: &BuildArgs,
 ) -> Result<()> {
-    let dc = DevContainer::new(
-        args.resolve_workspace_folder()?,
-        args.resolve_config_path()?,
-    )
-    .await
-    .wrap_err("failed to initialize devcontainer client")?;
+    let dc = Arc::new(
+        DevContainer::new(
+            args.resolve_workspace_folder()?,
+            args.resolve_config_path()?,
+        )
+        .await
+        .wrap_err("failed to initialize devcontainer client")?,
+    );
 
-    dc.up(logger, build_args.rebuild, build_args.no_cache)
-        .await?;
+    mem::forget(dc.clone().up(logger, build_args.rebuild, build_args.no_cache).await?);
     let up_cont = dc.inspect(logger).await?;
 
     install_prerequisites(logger, &dc, build_args.neovim_from_source).await?;

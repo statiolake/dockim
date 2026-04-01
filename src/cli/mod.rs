@@ -251,6 +251,9 @@ pub struct BuildArgs {
 
 #[derive(Debug, clap::Parser)]
 pub struct NeovimArgs {
+    #[clap(long, help = "Force rebuild the container image before starting")]
+    pub rebuild: bool,
+
     #[clap(
         long,
         default_value = "false",
@@ -274,12 +277,18 @@ pub struct NeovimArgs {
 
 #[derive(Debug, clap::Parser)]
 pub struct ShellArgs {
+    #[clap(long, help = "Force rebuild the container image before starting")]
+    pub rebuild: bool,
+
     #[clap(help = "Additional arguments to pass to the shell")]
     pub args: Vec<String>,
 }
 
 #[derive(Debug, clap::Parser)]
 pub struct BashArgs {
+    #[clap(long, help = "Force rebuild the container image before starting")]
+    pub rebuild: bool,
+
     #[clap(help = "Additional arguments to pass to bash")]
     pub args: Vec<String>,
 }
@@ -289,7 +298,10 @@ pub struct DownArgs {}
 
 #[derive(Debug, clap::Parser)]
 pub struct ExecArgs {
-    #[clap(help = "Command and arguments to execute in the container")]
+    #[clap(long, help = "Force rebuild the container image before starting")]
+    pub rebuild: bool,
+
+    #[clap(required = true, help = "Command and arguments to execute in the container")]
     pub args: Vec<String>,
 }
 

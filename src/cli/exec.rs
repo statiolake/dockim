@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{mem, sync::Arc};
 
 use miette::{miette, Result, WrapErr};
 use tokio::task;
@@ -29,7 +29,7 @@ pub async fn main(
         .wrap_err("failed to initialize devcontainer client")?,
     );
 
-    dc.up(logger, false, false).await?;
+    mem::forget(dc.clone().up(logger, exec_args.rebuild, false).await?);
 
     let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger, join_set));
     let _auto_forwarder =

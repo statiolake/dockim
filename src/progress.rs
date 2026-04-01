@@ -266,6 +266,14 @@ impl<'a> Logger<'a> {
         exec::run(&mut step, args).await
     }
 
+    /// Run a command best-effort: shows ✓ even if the command fails.
+    /// Use for optional operations that should not appear as errors on failure.
+    pub async fn try_exec<S: AsRef<str> + Debug>(&self, verb: &str, desc: &str, args: &[S]) {
+        let mut step = self.step(verb, desc);
+        let _ = exec::run(&mut step, args).await;
+        step.set_completed(None);
+    }
+
     /// Execute a foreground interactive process that owns the TTY (bash, shell, neovim, …).
     ///
     /// Always inherits stdout/stderr regardless of suppression state.

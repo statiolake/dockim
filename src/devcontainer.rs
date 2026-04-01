@@ -54,14 +54,16 @@ pub enum ContainerFileDestination {
     Home(String),
 }
 
-/// RAII guard that stops the container on drop, used when bash/shell/nvim started it themselves.
+/// RAII guard that stops the container on drop.
+/// Holds `Some(dc)` if we started the container (and should stop it), `None` if it was already
+/// running (leave it as-is). Use `mem::forget` to keep the container running after the guard drops.
 pub struct ContainerStopGuard {
-    dc: Arc<DevContainer>,
+    dc: Option<Arc<DevContainer>>,
 }
 
 impl Drop for ContainerStopGuard {
     fn drop(&mut self) {
-        let dc = Arc::clone(&self.dc);
+        let Some(dc) = self.dc.take() else { return };
         task::block_in_place(|| {
             Handle::current().block_on(async move {
                 let logger = crate::progress::root_logger();
@@ -70,6 +72,7 @@ impl Drop for ContainerStopGuard {
         });
     }
 }
+
 
 #[derive(Debug)]
 pub struct DevContainer {
@@ -120,22 +123,21 @@ impl DevContainer {
         self.inspect(logger).await.is_ok()
     }
 
-    /// Starts the container if not already running. Returns a [`ContainerStopGuard`] that stops it
-    /// on drop if we started it, or `None` if it was already running (leave it as-is).
-    pub async fn ensure_running(
-        dc: &Arc<Self>,
-        logger: &Logger<'_>,
-        rebuild: bool,
-        build_no_cache: bool,
-    ) -> Result<Option<ContainerStopGuard>> {
-        if dc.is_running(logger).await {
-            return Ok(None);
-        }
-        dc.up(logger, rebuild, build_no_cache).await?;
-        Ok(Some(ContainerStopGuard { dc: Arc::clone(dc) }))
+    /// Starts the container if not already running (or if `rebuild` is requested).
+    /// Returns a [`ContainerStopGuard`] that stops it on drop if we started it, or a no-op guard
+    /// if it was already running. Use `mem::forget` on the guard to keep the container running.
+    /// Call as `dc.clone().up(...)` when `dc` is needed after this call.
+    pub async fn up(self: Arc<Self>, logger: &Logger<'_>, rebuild: bool, build_no_cache: bool) -> Result<ContainerStopGuard> {
+        let we_started = if rebuild || !self.is_running(logger).await {
+            self.run_up(logger, rebuild, build_no_cache).await?;
+            true
+        } else {
+            false
+        };
+        Ok(ContainerStopGuard { dc: we_started.then_some(self) })
     }
 
-    pub async fn up(&self, logger: &Logger<'_>, rebuild: bool, build_no_cache: bool) -> Result<()> {
+    async fn run_up(&self, logger: &Logger<'_>, rebuild: bool, build_no_cache: bool) -> Result<()> {
         let mut args = self.make_args("up");
 
         if rebuild {
@@ -624,6 +626,22 @@ impl DevContainer {
         logger.exec(verb, desc, &args).await
     }
 
+    /// Execute a command best-effort: shows ✓ even on failure.
+    /// Use for optional operations that should not appear as errors on failure.
+    pub async fn try_exec<S: AsRef<str>>(
+        &self,
+        logger: &Logger<'_>,
+        verb: &str,
+        desc: &str,
+        command: &[S],
+        root_mode: RootMode,
+    ) {
+        if let Ok(mut args) = self.make_docker_exec_args(logger, root_mode).await {
+            args.extend(command.iter().map(|s| s.as_ref().to_string()));
+            logger.try_exec(verb, desc, &args).await;
+        }
+    }
+
     /// Execute a foreground interactive process that owns the TTY (bash, shell, neovim, …).
     ///
     /// Uses `docker exec -it` directly to guarantee PTY allocation.
@@ -942,27 +960,26 @@ impl DevContainer {
             ip_addr
         };
 
-        let _ = self
-            .exec(
-                logger,
-                "Modifying",
-                "container /etc/hosts for Rancher Desktop",
-                &[
-                    "sh",
-                    "-c",
-                    &format!(
-                        concat!(
-                            "grep -v 'host.docker.internal' /etc/hosts > /tmp/hosts.tmp && ",
-                            "echo '{host_ip_addr} host.docker.internal' >> /tmp/hosts.tmp && ",
-                            "cp /tmp/hosts.tmp /etc/hosts && ",
-                            "rm /tmp/hosts.tmp"
-                        ),
-                        host_ip_addr = host_ip_addr
+        self.try_exec(
+            logger,
+            "Modifying",
+            "container /etc/hosts for Rancher Desktop",
+            &[
+                "sh",
+                "-c",
+                &format!(
+                    concat!(
+                        "grep -v 'host.docker.internal' /etc/hosts > /tmp/hosts.tmp && ",
+                        "echo '{host_ip_addr} host.docker.internal' >> /tmp/hosts.tmp && ",
+                        "cat /tmp/hosts.tmp > /etc/hosts && ",
+                        "rm /tmp/hosts.tmp"
                     ),
-                ],
-                RootMode::Yes,
-            )
-            .await;
+                    host_ip_addr = host_ip_addr
+                ),
+            ],
+            RootMode::Yes,
+        )
+        .await;
 
         Ok(())
     }

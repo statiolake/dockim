@@ -29,7 +29,7 @@ pub async fn main(
         .wrap_err("failed to initialize devcontainer client")?,
     );
 
-    let _stop_guard = DevContainer::ensure_running(&dc, logger, false, false).await?;
+    let _stop_guard = dc.clone().up(logger, shell_args.rebuild, false).await?;
 
     let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger, join_set));
     let _auto_forwarder =

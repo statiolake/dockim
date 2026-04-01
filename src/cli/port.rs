@@ -28,7 +28,7 @@ pub async fn main(
         .wrap_err("failed to initialize devcontainer client")?,
     );
 
-    dc.up(logger, false, false).await?;
+    mem::forget(dc.clone().up(logger, false, false).await?);
 
     // `port add` creates a persistent forwarding: the socat container is intentionally kept alive
     // until the user explicitly removes it with `port rm`.  To achieve this the PortForwardGuard

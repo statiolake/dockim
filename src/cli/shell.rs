@@ -29,7 +29,7 @@ pub async fn main(
         .wrap_err("failed to initialize devcontainer client")?,
     );
 
-    let _stop_guard = DevContainer::ensure_running(&dc, logger, false, false).await?;
+    let _stop_guard = dc.clone().up(logger, shell_args.rebuild, false).await?;
 
     // Check if Neovim is installed, if not, run build first
     if dc
