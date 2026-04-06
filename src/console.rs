@@ -123,7 +123,7 @@ impl Console {
                 last_render: Instant::now(),
             })),
             node_id: root_id,
-            owns_node: false,
+            owns_node: true,
         }
     }
 
@@ -372,6 +372,19 @@ impl Console {
         }
     }
 
+    fn finalize_root(state: &mut RootState) {
+        let root_id = state.root_id;
+        let child_ids: Vec<NodeId> = state.nodes[&root_id].children.clone();
+        for child_id in child_ids {
+            Self::commit_node(state, child_id);
+        }
+
+        if state.is_tty {
+            Self::clear_live_zone(state);
+            Self::flush_root_committed(state);
+        }
+    }
+
     // --- Node lifecycle ---
 
     /// Commit a node to its parent: live + committed → parent.committed.
@@ -439,6 +452,11 @@ impl Drop for Console {
         }
         let mut state = self.state.lock().unwrap();
         if !state.nodes.contains_key(&self.node_id) {
+            return;
+        }
+
+        if self.node_id == state.root_id {
+            Self::finalize_root(&mut state);
             return;
         }
 

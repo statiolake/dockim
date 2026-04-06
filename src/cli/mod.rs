@@ -301,7 +301,10 @@ pub struct ExecArgs {
     #[clap(long, help = "Force rebuild the container image before starting")]
     pub rebuild: bool,
 
-    #[clap(required = true, help = "Command and arguments to execute in the container")]
+    #[clap(
+        required = true,
+        help = "Command and arguments to execute in the container"
+    )]
     pub args: Vec<String>,
 }
 

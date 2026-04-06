@@ -73,7 +73,6 @@ impl Drop for ContainerStopGuard {
     }
 }
 
-
 #[derive(Debug)]
 pub struct DevContainer {
     workspace_folder: PathBuf,
@@ -127,14 +126,21 @@ impl DevContainer {
     /// Returns a [`ContainerStopGuard`] that stops it on drop if we started it, or a no-op guard
     /// if it was already running. Use `mem::forget` on the guard to keep the container running.
     /// Call as `dc.clone().up(...)` when `dc` is needed after this call.
-    pub async fn up(self: Arc<Self>, logger: &Logger<'_>, rebuild: bool, build_no_cache: bool) -> Result<ContainerStopGuard> {
+    pub async fn up(
+        self: Arc<Self>,
+        logger: &Logger<'_>,
+        rebuild: bool,
+        build_no_cache: bool,
+    ) -> Result<ContainerStopGuard> {
         let we_started = if rebuild || !self.is_running(logger).await {
             self.run_up(logger, rebuild, build_no_cache).await?;
             true
         } else {
             false
         };
-        Ok(ContainerStopGuard { dc: we_started.then_some(self) })
+        Ok(ContainerStopGuard {
+            dc: we_started.then_some(self),
+        })
     }
 
     async fn run_up(&self, logger: &Logger<'_>, rebuild: bool, build_no_cache: bool) -> Result<()> {
@@ -570,11 +576,12 @@ impl DevContainer {
         Ok(())
     }
 
-    /// Build `docker exec -u <user> -w <workspace> <container_id>` prefix args.
+    /// Build `docker exec [-i] -u <user> -w <workspace> <container_id>` prefix args.
     async fn make_docker_exec_args(
         &self,
         logger: &Logger<'_>,
         root_mode: RootMode,
+        keep_stdin_open: bool,
     ) -> Result<Vec<String>> {
         let info = self
             .inspect(logger)

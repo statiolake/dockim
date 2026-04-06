@@ -12,6 +12,12 @@ use crate::{
     progress::Logger,
 };
 
+enum InputSource {
+    Null,
+    Stdio(Stdio),
+    Bytes(Vec<u8>),
+}
+
 // --- Low-level functions (take &mut Logger with step header) ---
 
 pub async fn run_spawn<S: AsRef<str> + Debug>(step: &mut Logger<'_>, args: &[S]) -> Result<Child> {
@@ -44,6 +50,14 @@ pub async fn run_spawn<S: AsRef<str> + Debug>(step: &mut Logger<'_>, args: &[S])
 
 /// Execute a command with live tail display of stdout/stderr.
 pub async fn run<S: AsRef<str> + Debug>(step: &mut Logger<'_>, args: &[S]) -> Result<()> {
+    run_streaming(step, args, InputSource::Null).await
+}
+
+async fn run_streaming<S: AsRef<str> + Debug>(
+    step: &mut Logger<'_>,
+    args: &[S],
+    input: InputSource,
+) -> Result<()> {
     ensure!(!args.is_empty(), "No command provided to exec");
 
     if step.is_verbose() {
@@ -52,10 +66,15 @@ pub async fn run<S: AsRef<str> + Debug>(step: &mut Logger<'_>, args: &[S]) -> Re
 
     let command = args[0].as_ref();
     let cmd_args = &args[1..];
+    let (stdin, bytes) = match input {
+        InputSource::Null => (Stdio::null(), None),
+        InputSource::Stdio(stdin) => (stdin, None),
+        InputSource::Bytes(bytes) => (Stdio::piped(), Some(bytes)),
+    };
 
     let mut child = match Command::new(command)
         .args(cmd_args.iter().map(|s| s.as_ref()))
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Detach from the controlling terminal so background processes (e.g. devcontainer
@@ -71,6 +90,21 @@ pub async fn run<S: AsRef<str> + Debug>(step: &mut Logger<'_>, args: &[S]) -> Re
             return Err(e);
         }
     };
+
+    if let Some(bytes) = bytes {
+        if let Err(e) = child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&bytes)
+            .await
+            .into_diagnostic()
+            .wrap_err("failed to write to child stdin")
+        {
+            step.set_failed();
+            return Err(e);
+        }
+    }
 
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
@@ -121,42 +155,7 @@ pub async fn run_with_stdin<S: AsRef<str> + Debug>(
     args: &[S],
     stdin: Stdio,
 ) -> Result<()> {
-    ensure!(!args.is_empty(), "no command provided to exec");
-
-    if step.is_verbose() {
-        step.set_verbose_line(format!("{args:?}"));
-    }
-
-    let command = args[0].as_ref();
-    let cmd_args = &args[1..];
-
-    let status = match Command::new(command)
-        .args(cmd_args.iter().map(|s| s.as_ref()))
-        .stdin(stdin)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .status()
-        .await
-        .into_diagnostic()
-        .wrap_err("exec failed")
-    {
-        Ok(s) => s,
-        Err(e) => {
-            step.set_failed();
-            return Err(e);
-        }
-    };
-
-    if status.success() {
-        step.set_completed(None);
-    } else {
-        step.set_failed();
-    }
-
-    ensure!(status.success(), "Command returned non-successful status");
-
-    Ok(())
+    run_streaming(step, args, InputSource::Stdio(stdin)).await
 }
 
 pub async fn run_with_bytes_stdin<S: AsRef<str> + Debug>(
@@ -164,64 +163,7 @@ pub async fn run_with_bytes_stdin<S: AsRef<str> + Debug>(
     args: &[S],
     bytes: &[u8],
 ) -> Result<()> {
-    ensure!(!args.is_empty(), "no command provided to exec");
-
-    if step.is_verbose() {
-        step.set_verbose_line(format!("{args:?}"));
-    }
-
-    let command = args[0].as_ref();
-    let cmd_args = &args[1..];
-
-    let mut child = match Command::new(command)
-        .args(cmd_args.iter().map(|s| s.as_ref()))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .into_diagnostic()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            step.set_failed();
-            return Err(e);
-        }
-    };
-    if let Err(e) = child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(bytes)
-        .await
-        .into_diagnostic()
-        .wrap_err("failed to write to child stdin")
-    {
-        step.set_failed();
-        return Err(e);
-    }
-    let status = match child
-        .wait()
-        .await
-        .into_diagnostic()
-        .wrap_err("failed to wait child process to finish")
-    {
-        Ok(s) => s,
-        Err(e) => {
-            step.set_failed();
-            return Err(e);
-        }
-    };
-
-    if status.success() {
-        step.set_completed(None);
-    } else {
-        step.set_failed();
-    }
-
-    ensure!(status.success(), "Command returned non-successful status");
-
-    Ok(())
+    run_streaming(step, args, InputSource::Bytes(bytes.to_vec())).await
 }
 
 pub async fn run_capturing_stdout<S: AsRef<str> + Debug>(

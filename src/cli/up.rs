@@ -21,7 +21,10 @@ pub async fn main(
         .wrap_err("failed to initialize devcontainer client")?,
     );
 
-    mem::forget(dc.up(logger, up_args.rebuild, up_args.build_no_cache).await?);
+    mem::forget(
+        dc.up(logger, up_args.rebuild, up_args.build_no_cache)
+            .await?,
+    );
 
     Ok(())
 }

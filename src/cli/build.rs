@@ -26,7 +26,11 @@ pub async fn main(
         .wrap_err("failed to initialize devcontainer client")?,
     );
 
-    mem::forget(dc.clone().up(logger, build_args.rebuild, build_args.no_cache).await?);
+    mem::forget(
+        dc.clone()
+            .up(logger, build_args.rebuild, build_args.no_cache)
+            .await?,
+    );
     let up_cont = dc.inspect(logger).await?;
 
     install_prerequisites(logger, &dc, build_args.neovim_from_source).await?;
