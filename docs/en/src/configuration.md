@@ -37,6 +37,11 @@ neovim_version = "v0.11.0"           # Neovim version for source builds
 dotfiles_repository_name = "dotfiles"
 dotfiles_install_command = "echo 'no dotfiles install command configured'"
 
+# Container Neovim launch settings
+[neovim]
+launch_with_shell = true              # Run Neovim through the configured shell by default
+shell_args = ["-lc"]                  # Shell flags; use ["-lic"] to source .zshrc
+
 # Remote Neovim Settings
 [remote]
 background = false                    # Run client in background
@@ -77,9 +82,17 @@ neovim_version = "nightly"    # Latest nightly build
 **Build Options:**
 ```toml
 [neovim]
-version = "v0.11.0"
-build_from_source = false    # Use pre-built binaries by default
-build_options = []           # Custom build flags
+launch_with_shell = true     # Start with `<shell> -lc 'exec env ... nvim ...'`
+shell_args = ["-lc"]         # Run as `<shell> -lc 'exec env ... nvim ...'`
+```
+
+**Run Neovim through zsh to inherit shell-initialized PATH:**
+```toml
+shell = "/bin/zsh"
+
+[neovim]
+launch_with_shell = true
+shell_args = ["-lic"]        # interactive + login; useful when PATH comes from zsh startup files
 ```
 
 ### Dotfiles Integration

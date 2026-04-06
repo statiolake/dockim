@@ -37,6 +37,11 @@ neovim_version = "v0.11.0"           # ソースビルド用 Neovim バージョ
 dotfiles_repository_name = "dotfiles"
 dotfiles_install_command = "echo 'no dotfiles install command configured'"
 
+# コンテナ内 Neovim 起動設定
+[neovim]
+launch_with_shell = true              # デフォルトで設定済み shell 経由で Neovim を起動
+shell_args = ["-lc"]                  # zshrc まで読むなら ["-lic"]
+
 # リモート Neovim 設定
 [remote]
 background = false                    # クライアントをバックグラウンドで実行
@@ -77,9 +82,17 @@ neovim_version = "nightly"    # 最新ナイトリービルド
 **ビルドオプション:**
 ```toml
 [neovim]
-version = "v0.11.0"
-build_from_source = false    # デフォルトでプリビルドバイナリを使用
-build_options = []           # カスタムビルドフラグ
+launch_with_shell = true     # デフォルトでは `<shell> -lc 'exec env ... nvim ...'` で起動
+shell_args = ["-lc"]         # `<shell> -lc 'exec env ... nvim ...'` で起動
+```
+
+**zsh 経由で Neovim を起動して PATH を引き継ぐ:**
+```toml
+shell = "/bin/zsh"
+
+[neovim]
+launch_with_shell = true
+shell_args = ["-lic"]        # interactive + login。PATH を zsh 初期化に寄せるとき向き
 ```
 
 ### Dotfiles 統合

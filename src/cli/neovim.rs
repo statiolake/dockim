@@ -14,7 +14,7 @@ use crate::{
     auto_port_forward::AutoPortForwarder,
     cli::{Args, BuildArgs, NeovimArgs},
     clipboard::ClipboardServer,
-    config::Config,
+    config::{Config, NeovimConfig},
     console::SuppressGuard,
     devcontainer::{DevContainer, RootMode},
     port_forwarder::PortForwarder,
@@ -118,7 +118,7 @@ pub async fn main(
     // _auto_forwarder, port_forwarder, clipboard, _stop_guard are dropped here.
     // Caller's join_set.join_all() waits for all tasks to complete.
     if neovim_args.no_remote_ui {
-        run_neovim_directly(logger, &dc, args, clipboard_port).await
+        run_neovim_directly(logger, config, &dc, args, clipboard_port).await
     } else {
         let host_port = host_port.unwrap();
         let container_port = container_port.unwrap();
@@ -182,16 +182,65 @@ fn format_envs_to_invocation(envs: &HashMap<&'static str, String>) -> Vec<String
     result
 }
 
+fn shell_quote(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+    if arg
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"-_./:=@".contains(&b))
+    {
+        return arg.to_string();
+    }
+
+    format!("'{}'", arg.replace('\'', r"'\''"))
+}
+
+fn build_neovim_invocation(
+    config: &Config,
+    neovim_config: &NeovimConfig,
+    envs: &HashMap<&'static str, String>,
+    command: &[String],
+) -> Result<Vec<String>> {
+    let mut invocation = format_envs_to_invocation(envs);
+    invocation.extend(command.iter().cloned());
+
+    if !neovim_config.launch_with_shell {
+        return Ok(invocation);
+    }
+
+    if neovim_config.shell_args.is_empty() {
+        return Err(miette!(
+            "neovim.shell_args must not be empty when neovim.launch_with_shell is enabled"
+        ));
+    }
+
+    let command = invocation
+        .iter()
+        .map(|arg| shell_quote(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let mut wrapped = vec![config.shell.clone()];
+    wrapped.extend(neovim_config.shell_args.iter().cloned());
+    wrapped.push(format!("exec {command}"));
+    Ok(wrapped)
+}
+
 async fn run_neovim_directly(
     logger: &Logger<'_>,
+    config: &Config,
     dc: &DevContainer,
     args: &Args,
     clipboard_server_port: Option<u16>,
 ) -> Result<()> {
     let envs = populate_envs(logger, args, true, clipboard_server_port).await?;
-    let mut args = format_envs_to_invocation(&envs);
-    args.push("TERM=screen-256color".to_string());
-    args.push("nvim".to_string());
+    let args = build_neovim_invocation(
+        config,
+        &config.neovim,
+        &envs,
+        &["TERM=screen-256color".to_string(), "nvim".to_string()],
+    )?;
     let _suppress = SuppressGuard::new();
     dc.exec_interactive(logger, "Launching", "Neovim", &args, RootMode::No)
         .await
@@ -208,13 +257,18 @@ async fn run_neovim_server_and_attach(
     manager: &PortForwarder,
 ) -> Result<()> {
     let envs = populate_envs(logger, args, false, clipboard_server_port).await?;
-    let mut args = format_envs_to_invocation(&envs);
-
     let listen = format!("0.0.0.0:{container_port}");
-    args.push("nvim".to_string());
-    args.push("--headless".to_string());
-    args.push("--listen".to_string());
-    args.push(listen);
+    let args = build_neovim_invocation(
+        config,
+        &config.neovim,
+        &envs,
+        &[
+            "nvim".to_string(),
+            "--headless".to_string(),
+            "--listen".to_string(),
+            listen,
+        ],
+    )?;
     let nvim = Rc::new(Mutex::new(
         dc.spawn(logger, "Launching", "Neovim server", &args, RootMode::No)
             .await?,

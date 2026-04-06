@@ -10,6 +10,9 @@ pub struct Config {
     #[serde(default = "default_shell")]
     pub shell: String,
 
+    #[serde(default)]
+    pub neovim: NeovimConfig,
+
     #[serde(default = "default_neovim_version")]
     pub neovim_version: String,
 
@@ -24,6 +27,15 @@ pub struct Config {
 
     #[serde(default)]
     pub remote: RemoteConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct NeovimConfig {
+    #[serde(default = "default_neovim_launch_with_shell")]
+    pub launch_with_shell: bool,
+
+    #[serde(default = "default_neovim_shell_args")]
+    pub shell_args: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -48,11 +60,21 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             shell: default_shell(),
+            neovim: NeovimConfig::default(),
             neovim_version: default_neovim_version(),
             neovim_binary_repository: default_neovim_binary_repository(),
             dotfiles_repository_name: default_dotfiles_repository_name(),
             dotfiles_install_command: default_dotfiles_install_command(),
             remote: RemoteConfig::default(),
+        }
+    }
+}
+
+impl Default for NeovimConfig {
+    fn default() -> Self {
+        NeovimConfig {
+            launch_with_shell: default_neovim_launch_with_shell(),
+            shell_args: default_neovim_shell_args(),
         }
     }
 }
@@ -71,6 +93,14 @@ impl Default for RemoteConfig {
 
 fn default_shell() -> String {
     "/usr/bin/bash".to_string()
+}
+
+fn default_neovim_launch_with_shell() -> bool {
+    true
+}
+
+fn default_neovim_shell_args() -> Vec<String> {
+    vec!["-lc".to_string()]
 }
 
 fn default_neovim_version() -> String {
