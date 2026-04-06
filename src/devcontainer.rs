@@ -590,12 +590,20 @@ impl DevContainer {
         Ok(vec![
             "docker".to_string(),
             "exec".to_string(),
+            if keep_stdin_open {
+                "-i".to_string()
+            } else {
+                String::new()
+            },
             "-u".to_string(),
             user,
             "-w".to_string(),
             info.remote_workspace_folder.clone(),
             info.container_id.clone(),
-        ])
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect())
     }
 
     pub async fn spawn<S: AsRef<str>>(
@@ -606,7 +614,7 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<Child> {
-        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
+        let mut args = self.make_docker_exec_args(logger, root_mode, false).await?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         logger.spawn(verb, desc, &args).await
@@ -620,7 +628,7 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<()> {
-        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
+        let mut args = self.make_docker_exec_args(logger, root_mode, false).await?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         logger.exec(verb, desc, &args).await
@@ -636,7 +644,7 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) {
-        if let Ok(mut args) = self.make_docker_exec_args(logger, root_mode).await {
+        if let Ok(mut args) = self.make_docker_exec_args(logger, root_mode, false).await {
             args.extend(command.iter().map(|s| s.as_ref().to_string()));
             logger.try_exec(verb, desc, &args).await;
         }
@@ -653,7 +661,7 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<()> {
-        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
+        let mut args = self.make_docker_exec_args(logger, root_mode, false).await?;
         // Insert -it after "docker exec" for PTY allocation
         args.insert(2, "-it".to_string());
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
@@ -669,7 +677,7 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<String> {
-        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
+        let mut args = self.make_docker_exec_args(logger, root_mode, false).await?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         logger.capturing_stdout(verb, desc, &args).await
@@ -684,7 +692,7 @@ impl DevContainer {
         root_mode: RootMode,
     ) -> Result<ExecOutput, ExecOutput> {
         let mut args = self
-            .make_docker_exec_args(logger, root_mode)
+            .make_docker_exec_args(logger, root_mode, false)
             .await
             .map_err(|e| ExecOutput {
                 stdout: String::new(),
@@ -704,7 +712,7 @@ impl DevContainer {
         stdin: Stdio,
         root_mode: RootMode,
     ) -> Result<()> {
-        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
+        let mut args = self.make_docker_exec_args(logger, root_mode, true).await?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         logger.with_stdin(verb, desc, &args, stdin).await
@@ -719,7 +727,7 @@ impl DevContainer {
         stdin: &[u8],
         root_mode: RootMode,
     ) -> Result<()> {
-        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
+        let mut args = self.make_docker_exec_args(logger, root_mode, true).await?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
 
         logger.with_bytes_stdin(verb, desc, &args, stdin).await
@@ -895,7 +903,7 @@ impl DevContainer {
         command: &[S],
         root_mode: RootMode,
     ) -> Result<Vec<String>> {
-        let mut args = self.make_docker_exec_args(logger, root_mode).await?;
+        let mut args = self.make_docker_exec_args(logger, root_mode, false).await?;
         args.extend(command.iter().map(|s| s.as_ref().to_string()));
         Ok(args)
     }
