@@ -181,9 +181,14 @@ Runs an agent CLI inside the container after copying its host-side settings only
 ```bash
 # Run Codex in the container and pass arguments after --
 dockim agent codex -- --dangerously-skip-permissions
+
+# Run Claude Code in the container
+dockim agent claude -- --dangerously-skip-permissions
 ```
 
-The initial implementation supports Codex. It copies host `~/.codex` to container `~/.codex` only if the destination path does not exist, skips symbolic links, and then runs `npx --yes @openai/codex` in the container.
+The initial implementation supports Codex and Claude Code. It copies host `~/.codex`, `~/.claude`, and `~/.claude.json` to the matching container home path only if the destination path does not exist, skips symbolic links, and then runs the agent through `npx`.
+
+For Claude Code, if host `~/.claude/settings.json` has the same `env` entry with `CLAUDE_CODE_USE_BEDROCK` enabled and `AWS_PROFILE` set, Dockim creates container `~/.aws` only when it does not already exist. The generated AWS files include only the selected profile's `config` section and, for non-SSO profiles, only the selected profile's `credentials` section. SSO profiles skip `credentials`.
 
 #### `dockim exec`
 
