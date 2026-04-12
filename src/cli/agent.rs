@@ -16,6 +16,15 @@ use crate::{
     progress::Logger,
 };
 
+const CODEX_ENV_SCRIPT: &str = concat!(
+    "PATH=\"$HOME/.local/share/dotfiles_standalone_node/bin:$PATH\"; ",
+    "export PATH; ",
+    "case \"${TERM:-}\" in ''|dumb|xterm) TERM=xterm-256color;; esac; ",
+    "export TERM; ",
+    "COLORTERM=\"${COLORTERM:-truecolor}\"; ",
+    "export COLORTERM"
+);
+
 pub async fn main(
     logger: &Logger<'_>,
     config: &Config,
@@ -54,7 +63,7 @@ async fn run_codex(
     let mut command = vec![
         config.shell.clone(),
         "-lc".to_string(),
-        "PATH=\"$HOME/.local/share/dotfiles_standalone_node/bin:$PATH\"; exec npx --yes @openai/codex \"$@\"".to_string(),
+        format!("{CODEX_ENV_SCRIPT}; exec npx --yes @openai/codex \"$@\""),
         "dockim-agent-codex".to_string(),
     ];
     command.extend(args.iter().cloned());
@@ -73,11 +82,7 @@ async fn ensure_npx_available(logger: &Logger<'_>, dc: &DevContainer) -> Result<
         logger,
         "Checking",
         "npx",
-        &[
-            "sh",
-            "-lc",
-            "PATH=\"$HOME/.local/share/dotfiles_standalone_node/bin:$PATH\"; command -v npx",
-        ],
+        &["sh", "-lc", &format!("{CODEX_ENV_SCRIPT}; command -v npx")],
         RootMode::No,
     )
     .await
