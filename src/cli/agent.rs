@@ -45,8 +45,8 @@ pub async fn main(
     let _stop_guard = dc.clone().up(logger, false, false).await?;
 
     match agent_args.agent {
-        AgentKind::Codex => run_codex(logger, config, &dc, &agent_args.args).await,
-        AgentKind::Claude => run_claude(logger, config, &dc, &agent_args.args).await,
+        AgentKind::Codex => run_codex(logger, config, &dc, agent_args).await,
+        AgentKind::Claude => run_claude(logger, config, &dc, agent_args).await,
     }
 }
 
@@ -54,9 +54,14 @@ async fn run_codex(
     logger: &Logger<'_>,
     config: &Config,
     dc: &DevContainer,
-    args: &[String],
+    agent_args: &AgentArgs,
 ) -> Result<()> {
-    sync_home_dir_if_absent(logger, dc, ".codex", "Codex settings").await?;
+    setup_codex(logger, dc).await?;
+    if agent_args.setup_only {
+        logger.log("Finished", "Codex setup completed");
+        return Ok(());
+    }
+
     ensure_npx_available(logger, dc).await?;
 
     let mut command = vec![
@@ -65,7 +70,7 @@ async fn run_codex(
         format!("{AGENT_ENV_SCRIPT}; exec npx --yes @openai/codex \"$@\""),
         "dockim-agent-codex".to_string(),
     ];
-    command.extend(args.iter().cloned());
+    command.extend(agent_args.args.iter().cloned());
 
     let _suppress = SuppressGuard::new();
     dc.exec_interactive(logger, "Running", "Codex", &command, RootMode::No)
@@ -80,11 +85,14 @@ async fn run_claude(
     logger: &Logger<'_>,
     config: &Config,
     dc: &DevContainer,
-    args: &[String],
+    agent_args: &AgentArgs,
 ) -> Result<()> {
-    sync_home_dir_if_absent(logger, dc, ".claude", "Claude settings").await?;
-    sync_home_file_if_absent(logger, dc, ".claude.json", "Claude settings file").await?;
-    sync_aws_for_claude_if_needed(logger, dc).await?;
+    setup_claude(logger, dc).await?;
+    if agent_args.setup_only {
+        logger.log("Finished", "Claude Code setup completed");
+        return Ok(());
+    }
+
     ensure_npx_available(logger, dc).await?;
 
     let mut command = vec![
@@ -93,7 +101,7 @@ async fn run_claude(
         format!("{AGENT_ENV_SCRIPT}; exec npx --yes @anthropic-ai/claude-code \"$@\""),
         "dockim-agent-claude".to_string(),
     ];
-    command.extend(args.iter().cloned());
+    command.extend(agent_args.args.iter().cloned());
 
     let _suppress = SuppressGuard::new();
     dc.exec_interactive(logger, "Running", "Claude Code", &command, RootMode::No)
@@ -102,6 +110,16 @@ async fn run_claude(
             help = "run `dockim build` first or install Node.js/npm in the dev container",
             "failed to execute Claude Code in the container",
         ))
+}
+
+async fn setup_codex(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> {
+    sync_home_dir_if_absent(logger, dc, ".codex", "Codex settings").await
+}
+
+async fn setup_claude(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> {
+    sync_home_dir_if_absent(logger, dc, ".claude", "Claude settings").await?;
+    sync_home_file_if_absent(logger, dc, ".claude.json", "Claude settings file").await?;
+    sync_aws_for_claude_if_needed(logger, dc).await
 }
 
 async fn ensure_npx_available(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> {

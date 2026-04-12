@@ -222,6 +222,9 @@ pub struct AgentArgs {
     #[clap(value_enum, help = "Agent CLI to run")]
     pub agent: AgentKind,
 
+    #[clap(long, help = "Only copy agent settings; do not run the agent CLI")]
+    pub setup_only: bool,
+
     #[clap(last = true, help = "Arguments to pass to the agent CLI")]
     pub args: Vec<String>,
 }
@@ -456,6 +459,28 @@ mod tests {
         };
 
         assert_eq!(agent_args.agent, AgentKind::Codex);
+        assert!(!agent_args.setup_only);
+        assert_eq!(agent_args.args, vec!["--dangerously-skip-permissions"]);
+    }
+
+    #[test]
+    fn agent_accepts_setup_only_before_trailing_agent_args() {
+        let args = Args::try_parse_from([
+            "dockim",
+            "agent",
+            "claude",
+            "--setup-only",
+            "--",
+            "--dangerously-skip-permissions",
+        ])
+        .unwrap();
+
+        let Subcommand::Agent(agent_args) = args.subcommand else {
+            panic!("expected agent subcommand");
+        };
+
+        assert_eq!(agent_args.agent, AgentKind::Claude);
+        assert!(agent_args.setup_only);
         assert_eq!(agent_args.args, vec!["--dangerously-skip-permissions"]);
     }
 }

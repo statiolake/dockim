@@ -184,6 +184,9 @@ dockim agent codex -- --dangerously-skip-permissions
 
 # Run Claude Code in the container
 dockim agent claude -- --dangerously-skip-permissions
+
+# Copy settings only without launching the agent
+dockim agent claude --setup-only
 ```
 
 The initial implementation supports Codex and Claude Code. It copies host `~/.codex`, `~/.claude`, and `~/.claude.json` to the matching container home path only if the destination path does not exist, skips symbolic links, and then runs the agent through `npx`.
