@@ -174,6 +174,17 @@ dockim sh  # alias
 dockim bash
 ```
 
+#### `dockim agent`
+
+Runs an agent CLI inside the container after copying its host-side settings only when the container-side settings directory does not already exist.
+
+```bash
+# Run Codex in the container and pass arguments after --
+dockim agent codex -- --dangerously-skip-permissions
+```
+
+The initial implementation supports Codex. It copies host `~/.codex` to container `~/.codex` only if the destination path does not exist, skips symbolic links, and then runs `npx --yes @openai/codex` in the container.
+
 #### `dockim exec`
 
 Executes a command in the container.

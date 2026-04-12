@@ -1,8 +1,8 @@
 use clap::Parser;
 use dockim::{
     cli::{
-        bash, build, clipboard_server, down, exec as cli_exec, init, init_config, init_docker, ls,
-        neovim, port, ps, shell, stop, up, Args, Subcommand,
+        agent, bash, build, clipboard_server, down, exec as cli_exec, init, init_config,
+        init_docker, ls, neovim, port, ps, shell, stop, up, Args, Subcommand,
     },
     config::Config,
     exec,
@@ -21,6 +21,9 @@ async fn main() -> Result<()> {
     let mut join_set = JoinSet::new();
 
     let result = match &args.subcommand {
+        Subcommand::Agent(agent_args) => {
+            agent::main(&logger, &config, &args, agent_args, &mut join_set).await
+        }
         Subcommand::Init(init_args) => init::main(&logger, &config, &args, init_args).await,
         Subcommand::InitConfig(init_config_args) => {
             init_config::main(&logger, &config, &args, init_config_args).await
