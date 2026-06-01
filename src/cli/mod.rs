@@ -7,7 +7,6 @@ use miette::{miette, Context, IntoDiagnostic, Result};
 
 use crate::config::Config;
 
-pub mod agent;
 pub mod bash;
 pub mod build;
 pub mod clipboard_server;
@@ -157,9 +156,6 @@ impl Args {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Subcommand {
-    #[clap(about = "Run an agent CLI in the dev container")]
-    Agent(AgentArgs),
-
     #[clap(about = "Initialize dev container configuration files")]
     Init(InitArgs),
 
@@ -215,24 +211,6 @@ pub enum Subcommand {
 #[derive(Debug, Clone)]
 pub struct Metadata {
     pub config: Config,
-}
-
-#[derive(Debug, clap::Parser)]
-pub struct AgentArgs {
-    #[clap(value_enum, help = "Agent CLI to run")]
-    pub agent: AgentKind,
-
-    #[clap(long, help = "Only copy agent settings; do not run the agent CLI")]
-    pub setup_only: bool,
-
-    #[clap(last = true, help = "Arguments to pass to the agent CLI")]
-    pub args: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum AgentKind {
-    Codex,
-    Claude,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -382,10 +360,9 @@ pub struct LsArgs {}
 mod tests {
     use std::{fs, path};
 
-    use clap::Parser;
     use tempfile::tempdir;
 
-    use super::{AgentKind, Args, DevContainerConfigEntry, Subcommand};
+    use super::{Args, DevContainerConfigEntry, Subcommand};
 
     #[test]
     fn discover_devcontainer_configs_lists_root_and_named_configs() {
@@ -441,46 +418,5 @@ mod tests {
             resolved,
             path::absolute(devcontainer_dir.join("api").join("devcontainer.json")).unwrap()
         );
-    }
-
-    #[test]
-    fn agent_codex_accepts_trailing_agent_args_after_separator() {
-        let args = Args::try_parse_from([
-            "dockim",
-            "agent",
-            "codex",
-            "--",
-            "--dangerously-skip-permissions",
-        ])
-        .unwrap();
-
-        let Subcommand::Agent(agent_args) = args.subcommand else {
-            panic!("expected agent subcommand");
-        };
-
-        assert_eq!(agent_args.agent, AgentKind::Codex);
-        assert!(!agent_args.setup_only);
-        assert_eq!(agent_args.args, vec!["--dangerously-skip-permissions"]);
-    }
-
-    #[test]
-    fn agent_accepts_setup_only_before_trailing_agent_args() {
-        let args = Args::try_parse_from([
-            "dockim",
-            "agent",
-            "claude",
-            "--setup-only",
-            "--",
-            "--dangerously-skip-permissions",
-        ])
-        .unwrap();
-
-        let Subcommand::Agent(agent_args) = args.subcommand else {
-            panic!("expected agent subcommand");
-        };
-
-        assert_eq!(agent_args.agent, AgentKind::Claude);
-        assert!(agent_args.setup_only);
-        assert_eq!(agent_args.args, vec!["--dangerously-skip-permissions"]);
     }
 }
