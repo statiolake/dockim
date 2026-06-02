@@ -25,6 +25,9 @@ pub struct Config {
     #[serde(default = "default_dotfiles_install_command")]
     pub dotfiles_install_command: String,
 
+    #[serde(default = "default_copy_credentials")]
+    pub copy_credentials: bool,
+
     #[serde(default)]
     pub remote: RemoteConfig,
 }
@@ -65,6 +68,7 @@ impl Default for Config {
             neovim_binary_repository: default_neovim_binary_repository(),
             dotfiles_repository_name: default_dotfiles_repository_name(),
             dotfiles_install_command: default_dotfiles_install_command(),
+            copy_credentials: default_copy_credentials(),
             remote: RemoteConfig::default(),
         }
     }
@@ -117,6 +121,10 @@ fn default_dotfiles_repository_name() -> String {
 
 fn default_dotfiles_install_command() -> String {
     "echo 'no dotfiles install command configured'".to_string()
+}
+
+fn default_copy_credentials() -> bool {
+    false
 }
 
 fn default_remote_args_unix() -> Vec<String> {
@@ -191,5 +199,22 @@ impl Config {
             .wrap_err("failed to parse config file")?;
 
         Ok(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn default_does_not_copy_credentials() {
+        assert!(!Config::default().copy_credentials);
+    }
+
+    #[test]
+    fn missing_copy_credentials_defaults_to_false() {
+        let config: Config = toml::from_str("").unwrap();
+
+        assert!(!config.copy_credentials);
     }
 }

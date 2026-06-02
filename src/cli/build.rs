@@ -42,11 +42,11 @@ pub async fn main(
         }
         {
             let span = logger.span("Setting up", "GitHub CLI");
-            setup_github_cli(&span, &dc).await?;
+            setup_github_cli(&span, config, &dc).await?;
         }
         {
             let span = logger.span("Copying", "Copilot credentials");
-            copy_copilot(&span, &dc).await?;
+            copy_copilot(&span, config, &dc).await?;
         }
         prepare_opt_dir(logger, &dc, &up_cont.remote_user).await?;
     } else {
@@ -56,8 +56,8 @@ pub async fn main(
 
         tokio::try_join!(
             install_neovim(&span_neovim, config, &dc, build_args.neovim_from_source),
-            setup_github_cli(&span_gh, &dc),
-            copy_copilot(&span_copilot, &dc),
+            setup_github_cli(&span_gh, config, &dc),
+            copy_copilot(&span_copilot, config, &dc),
             prepare_opt_dir(logger, &dc, &up_cont.remote_user),
         )?;
     }
@@ -308,7 +308,7 @@ fn is_glibc_compatibility_error_str(error_str: &str) -> bool {
         || error_lower.contains("undefined symbol")
 }
 
-async fn setup_github_cli(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> {
+async fn setup_github_cli(logger: &Logger<'_>, config: &Config, dc: &DevContainer) -> Result<()> {
     async fn install<'a>(logger: &Logger<'a>, dc: &DevContainer) -> Result<()> {
         // Check if gh is already installed
         {
@@ -415,12 +415,21 @@ async fn setup_github_cli(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> 
     }
 
     install(logger, dc).await?;
-    login(logger, dc).await?;
+    if config.copy_credentials {
+        login(logger, dc).await?;
+    } else {
+        logger.log("Skipped", "GitHub credentials copy is disabled");
+    }
 
     Ok(())
 }
 
-async fn copy_copilot(logger: &Logger<'_>, dc: &DevContainer) -> Result<()> {
+async fn copy_copilot(logger: &Logger<'_>, config: &Config, dc: &DevContainer) -> Result<()> {
+    if !config.copy_credentials {
+        logger.log("Skipped", "Copilot credentials copy is disabled");
+        return Ok(());
+    }
+
     let local_home =
         dirs::home_dir().ok_or_else(|| miette!("failed to get local home directory"))?;
     let file_mappings = ["apps.json", "hosts.json", "versions.json"]
@@ -464,6 +473,7 @@ async fn prepare_opt_dir(logger: &Logger<'_>, dc: &DevContainer, owner_user: &st
 }
 
 async fn install_dotfiles(logger: &Logger<'_>, config: &Config, dc: &DevContainer) -> Result<()> {
+    let dotfiles_repository_name = shell_quote(&config.dotfiles_repository_name);
     dc.exec(
         logger,
         "Deploying",
@@ -474,10 +484,11 @@ async fn install_dotfiles(logger: &Logger<'_>, config: &Config, dc: &DevContaine
             &format!(
                 concat!(
                     "rm -rf /opt/dotfiles && ",
-                    "~/.local/bin/gh repo clone dotfiles /opt/dotfiles && ",
+                    "~/.local/bin/gh repo clone {dotfiles_repository_name} /opt/dotfiles && ",
                     "cd /opt/dotfiles && ",
                     "{dotfiles_install_command}"
                 ),
+                dotfiles_repository_name = dotfiles_repository_name,
                 dotfiles_install_command = config.dotfiles_install_command
             ),
         ],
@@ -486,4 +497,38 @@ async fn install_dotfiles(logger: &Logger<'_>, config: &Config, dc: &DevContaine
     .await?;
 
     Ok(())
+}
+
+fn shell_quote(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+    if arg
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"-_./:=@".contains(&b))
+    {
+        return arg.to_string();
+    }
+
+    format!("'{}'", arg.replace('\'', r"'\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_quote;
+
+    #[test]
+    fn shell_quote_leaves_repo_names_unquoted_when_safe() {
+        assert_eq!(shell_quote("owner/dotfiles"), "owner/dotfiles");
+        assert_eq!(
+            shell_quote("git@github.com:owner/dotfiles"),
+            "git@github.com:owner/dotfiles"
+        );
+    }
+
+    #[test]
+    fn shell_quote_quotes_spaces_and_single_quotes() {
+        assert_eq!(shell_quote("owner/my dotfiles"), "'owner/my dotfiles'");
+        assert_eq!(shell_quote("owner/it's-mine"), "'owner/it'\\''s-mine'");
+    }
 }
