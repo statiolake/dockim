@@ -84,31 +84,26 @@ pub async fn main(
 
     let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger, join_set));
 
-    // Determine ports for remote UI mode (needed before starting auto-forwarder).
-    let (host_port, container_port) = if neovim_args.no_remote_ui {
+    let use_remote_ui = config.neovim.remote_ui && !neovim_args.no_remote_ui;
+
+    // Determine ports for remote UI mode (needed before starting auto-forwarder). Both sides are
+    // dynamic by default: the container-side port only needs to be free inside this container,
+    // while the forwarding manager chooses a host-side port and handles host collisions.
+    let (preferred_host_port, container_port) = if !use_remote_ui {
         (None, None)
-    } else if let Some(host_port) = &neovim_args.host_port {
-        let cp = neovim_args
-            .container_port
-            .as_deref()
-            .unwrap_or("54321")
-            .to_string();
-        (Some(host_port.clone()), Some(cp))
     } else {
-        let auto_host_port = dc.find_available_host_port().await?;
-        logger.write(&format!("Auto-selected host port: {auto_host_port}"));
-        (Some(auto_host_port.to_string()), Some("54321".to_string()))
+        let container_port = match neovim_args.container_port {
+            Some(port) => port,
+            None => dc.find_available_container_port(logger).await?,
+        };
+        (neovim_args.host_port, Some(container_port))
     };
 
-    let exclude_ports: Vec<u16> = container_port
-        .as_deref()
-        .and_then(|p| p.parse().ok())
-        .into_iter()
-        .collect();
+    let reserved_ports: Vec<u16> = container_port.iter().copied().collect();
     let _auto_forwarder = AutoPortForwarder::start(
         dc.clone(),
         port_forwarder.clone(),
-        exclude_ports,
+        reserved_ports,
         logger,
         join_set,
     );
@@ -117,13 +112,12 @@ pub async fn main(
 
     // _auto_forwarder, port_forwarder, clipboard, _stop_guard are dropped here.
     // Caller's join_set.join_all() waits for all tasks to complete.
-    if neovim_args.no_remote_ui {
+    if !use_remote_ui {
         run_neovim_directly(logger, config, &dc, args, clipboard_port).await
     } else {
-        let host_port = host_port.unwrap();
         let container_port = container_port.unwrap();
         select! {
-            result = run_neovim_server_and_attach(logger, config, &dc, args, &host_port, &container_port, clipboard_port, &port_forwarder) => result,
+            result = run_neovim_server_and_attach(logger, config, &dc, args, preferred_host_port, container_port, clipboard_port, &port_forwarder) => result,
             _ = signal::ctrl_c() => {
                 logger.log("Stopping", "due to received Ctrl+C signal");
                 Ok(())
@@ -251,8 +245,8 @@ async fn run_neovim_server_and_attach(
     config: &Config,
     dc: &DevContainer,
     args: &Args,
-    host_port: &str,
-    container_port: &str,
+    preferred_host_port: Option<u16>,
+    container_port: u16,
     clipboard_server_port: Option<u16>,
     manager: &PortForwarder,
 ) -> Result<()> {
@@ -285,12 +279,15 @@ async fn run_neovim_server_and_attach(
     }
 
     // Set up port forwarding
-    let guard = manager.forward_port(host_port, container_port).await?;
+    let forwarded = manager
+        .forward_port(preferred_host_port, container_port)
+        .await?;
+    let host_port = forwarded.host_port;
 
     if config.remote.background {
         // Normally we want to remove the port forwarding when the server exits, but in the
         // background mode we want to keep it alive.
-        mem::forget(guard);
+        mem::forget(forwarded);
     }
 
     run_neovim_client_with_retry(logger, config, dc, host_port, &nvim).await
@@ -300,7 +297,7 @@ async fn run_neovim_client_with_retry(
     logger: &Logger<'_>,
     config: &Config,
     dc: &DevContainer,
-    host_port: &str,
+    host_port: u16,
     nvim: &Mutex<Child>,
 ) -> Result<()> {
     // Prepare execution arguments

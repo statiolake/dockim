@@ -125,6 +125,12 @@ dockim up --auto-ports
 # Dockim will scan for listening ports and forward them
 ```
 
+Only TCP listeners reachable through the container's network interface are considered. Loopback
+listeners (including Docker's internal DNS listener) are ignored because a sidecar connected to
+the container network cannot reach them. Ports already published by Docker or Docker Compose are
+not forwarded a second time. Dockim checks the running devcontainer's `NetworkSettings.Ports`
+rather than trying to duplicate the Compose `ports:` mapping.
+
 ## Application-Specific Scenarios
 
 ### Web Development

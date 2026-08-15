@@ -267,6 +267,10 @@ dotfiles_install_command = "echo 'no dotfiles install command configured'"
 Control how Neovim remote UI works:
 
 ```toml
+[neovim]
+# Use direct Neovim inside the container by default
+remote_ui = false
+
 [remote]
 # Run client in background (don't block terminal)
 background = false

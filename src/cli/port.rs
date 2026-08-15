@@ -1,7 +1,7 @@
 use std::{mem, sync::Arc};
 
 use itertools::Itertools;
-use miette::{bail, Context, Result};
+use miette::{bail, Context, IntoDiagnostic, Result};
 use tokio::task;
 
 use crate::{
@@ -54,11 +54,15 @@ async fn add_port(
     let (host_port, container_port) = parse_port_descriptor(&add_args.port_descriptor)?;
 
     // We need to forget because forward_port() returns a guard that will stop forwarding on drop
-    mem::forget(forwarder.forward_port(host_port, container_port).await?);
+    let forwarded = forwarder
+        .forward_port(Some(host_port), container_port)
+        .await?;
 
     logger.write(&format!(
-        "Port forwarding started: {host_port}:{container_port}"
+        "Port forwarding started: {}:{}",
+        forwarded.host_port, forwarded.container_port
     ));
+    mem::forget(forwarded);
     Ok(())
 }
 
@@ -72,7 +76,7 @@ async fn remove_port(
         logger.write("All port forwards removed");
     } else if let Some(port_descriptor) = &rm_args.port_descriptor {
         let (host_port, _) = parse_port_descriptor(port_descriptor)?;
-        forwarder.stop_forward_port(host_port).await?;
+        forwarder.stop_forward_port(&host_port.to_string()).await?;
         logger.write(&format!("Port forwarding stopped: {host_port}"));
     } else {
         bail!("Must specify either a port descriptor or --all flag");
@@ -104,10 +108,22 @@ async fn list_ports(logger: &Logger<'_>, forwarder: &PortForwarder) -> Result<()
     Ok(())
 }
 
-fn parse_port_descriptor(port_descriptor: &str) -> Result<(&str, &str)> {
+fn parse_port_descriptor(port_descriptor: &str) -> Result<(u16, u16)> {
     match *port_descriptor.split(':').collect_vec() {
-        [port] => Ok((port, port)),
-        [host_port, container_port] => Ok((host_port, container_port)),
+        [port] => {
+            let port = parse_port(port, port_descriptor)?;
+            Ok((port, port))
+        }
+        [host_port, container_port] => Ok((
+            parse_port(host_port, port_descriptor)?,
+            parse_port(container_port, port_descriptor)?,
+        )),
         _ => bail!("Invalid port descriptor: {}", port_descriptor),
     }
+}
+
+fn parse_port(port: &str, descriptor: &str) -> Result<u16> {
+    port.parse::<u16>()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("Invalid port descriptor: {descriptor}"))
 }

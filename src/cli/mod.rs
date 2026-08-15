@@ -257,7 +257,7 @@ pub struct NeovimArgs {
     #[clap(
         long,
         default_value = "false",
-        help = "Launch Neovim directly using dev container's TTY instead of remote UI"
+        help = "Launch Neovim directly using dev container's TTY instead of remote UI (overrides neovim.remote_ui)"
     )]
     pub no_remote_ui: bool,
 
@@ -266,13 +266,13 @@ pub struct NeovimArgs {
         long,
         help = "Host port for remote UI connection (default: random available port)"
     )]
-    pub host_port: Option<String>,
+    pub host_port: Option<u16>,
 
     #[clap(
         long,
-        help = "Container port for remote UI connection (default: 54321)"
+        help = "Container port for remote UI connection (default: random available port)"
     )]
-    pub container_port: Option<String>,
+    pub container_port: Option<u16>,
 }
 
 #[derive(Debug, clap::Parser)]

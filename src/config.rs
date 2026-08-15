@@ -34,6 +34,9 @@ pub struct Config {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct NeovimConfig {
+    #[serde(default = "default_neovim_remote_ui")]
+    pub remote_ui: bool,
+
     #[serde(default = "default_neovim_launch_with_shell")]
     pub launch_with_shell: bool,
 
@@ -77,6 +80,7 @@ impl Default for Config {
 impl Default for NeovimConfig {
     fn default() -> Self {
         NeovimConfig {
+            remote_ui: default_neovim_remote_ui(),
             launch_with_shell: default_neovim_launch_with_shell(),
             shell_args: default_neovim_shell_args(),
         }
@@ -100,6 +104,10 @@ fn default_shell() -> String {
 }
 
 fn default_neovim_launch_with_shell() -> bool {
+    true
+}
+
+fn default_neovim_remote_ui() -> bool {
     true
 }
 
@@ -216,5 +224,12 @@ mod tests {
         let config: Config = toml::from_str("").unwrap();
 
         assert!(!config.copy_credentials);
+    }
+
+    #[test]
+    fn neovim_remote_ui_defaults_to_true() {
+        let config: Config = toml::from_str("").unwrap();
+
+        assert!(config.neovim.remote_ui);
     }
 }

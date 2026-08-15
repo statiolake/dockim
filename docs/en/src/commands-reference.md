@@ -266,7 +266,7 @@ dockim v [OPTIONS] [FILES...]  # Short alias
 ```
 --no-remote-ui      Run Neovim directly in container (no remote UI)
 --host-port <PORT>  Specify host port for remote connection
---server-port <PORT> Specify container port for Neovim server
+--container-port <PORT> Specify container port for Neovim server
 --wait              Wait for editor to close before returning
 ```
 

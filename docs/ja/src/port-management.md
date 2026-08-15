@@ -125,6 +125,12 @@ dockim up --auto-ports
 # Dockim がリッスンポートをスキャンしてフォワード
 ```
 
+コンテナのネットワークインターフェースから到達できる TCP 待受だけを対象にします。
+`127.0.0.1` などの loopback 待受（Docker 内部DNSを含む）は、ネットワーク接続した
+sidecar から到達できないため無視します。Docker または Docker Compose がすでに公開して
+いるポートは二重にフォワードしません。実行中の devcontainer の
+`NetworkSettings.Ports` を参照して判定します。
+
 ## アプリケーション固有シナリオ
 
 ### Web 開発

@@ -266,7 +266,7 @@ dockim v [OPTIONS] [FILES...]  # 短縮エイリアス
 ```
 --no-remote-ui      コンテナ内で直接 Neovim を実行（リモート UI なし）
 --host-port <PORT>  リモート接続用ホストポートを指定
---server-port <PORT> Neovim サーバー用コンテナポートを指定
+--container-port <PORT> Neovim サーバー用コンテナポートを指定
 --wait              戻る前にエディタが閉じるのを待機
 ```
 

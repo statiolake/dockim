@@ -32,7 +32,7 @@ dockim neovim --no-remote-ui
 On your first launch, Dockim will:
 1. Start the container if it's not running
 2. Launch Neovim server inside the container
-3. Find an available port for the connection
+3. Select an available container port and host port for the connection
 4. Start your local Neovim client
 5. Establish the remote connection
 
@@ -70,9 +70,10 @@ dockim neovim --host-port 8080
 ```
 
 **Port Selection:**
-- Dockim automatically finds available ports
-- Default range: 52000-53000
-- You can specify a custom port if needed
+- Dockim automatically finds available host and container ports
+- If a requested host port is busy, Dockim selects another available host port
+- Docker-published ports are reused or excluded from Dockim's extra forwarding
+- You can specify custom host and container ports if needed
 - Multiple projects can run simultaneously
 
 ### Client Configuration
@@ -96,6 +97,9 @@ args = ["nvim", "--server", "{server}", "--remote-ui"]
 - `background`: Whether to run client in background
 - `use_clipboard_server`: Enable clipboard sync between host/container
 - `args`: Command template for launching the client
+
+Set `neovim.remote_ui = false` to make direct mode the default. The command-line
+flag `--no-remote-ui` always selects direct mode for a single invocation.
 
 ## Server Configuration
 

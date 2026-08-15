@@ -39,6 +39,7 @@ dotfiles_install_command = "echo 'no dotfiles install command configured'"
 
 # コンテナ内 Neovim 起動設定
 [neovim]
+remote_ui = true                       # デフォルトでホスト側の Neovim UI を使用
 launch_with_shell = true              # デフォルトで設定済み shell 経由で Neovim を起動
 shell_args = ["-lc"]                  # zshrc まで読むなら ["-lic"]
 
@@ -82,6 +83,7 @@ neovim_version = "nightly"    # 最新ナイトリービルド
 **ビルドオプション:**
 ```toml
 [neovim]
+remote_ui = true              # デフォルトでリモート UI。false なら direct mode
 launch_with_shell = true     # デフォルトでは `<shell> -lc 'exec env ... nvim ...'` で起動
 shell_args = ["-lc"]         # `<shell> -lc 'exec env ... nvim ...'` で起動
 ```
@@ -116,10 +118,14 @@ post_install_command = "source ~/.zshrc"
 
 **Neovim リモート UI:**
 ```toml
+[neovim]
+remote_ui = false                  # デフォルトでコンテナ内 direct mode
+```
+
+```toml
 [remote]
 background = false                   # バックグラウンドで実行しない
 use_clipboard_server = true         # クリップボード同期を有効化
-port_range = [52000, 53000]        # 接続用ポート範囲
 client_timeout = 30                  # 接続タイムアウト（秒）
 args = ["nvim", "--server", "{server}", "--remote-ui"]
 ```

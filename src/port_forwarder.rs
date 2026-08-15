@@ -5,7 +5,7 @@ use serde::Deserialize;
 use tokio::{sync::mpsc, task::JoinSet};
 
 use crate::{
-    devcontainer::{DevContainer, ForwardedPort},
+    devcontainer::{port_forward_container_name_prefix, DevContainer, ForwardedPort},
     progress::Logger,
 };
 
@@ -19,6 +19,18 @@ pub struct PortForwarder {
     console: crate::console::Console,
     verbose: bool,
     stop_tx: std::sync::Mutex<Option<mpsc::UnboundedSender<String>>>,
+}
+
+/// A port forwarding owned by a [`PortForwarder`].
+///
+/// The handle can represent either a socat container created by Dockim or an existing Docker
+/// publication. In the latter case dropping the handle is a no-op because Dockim does not own the
+/// Docker publication.
+#[derive(Debug)]
+pub struct PortForwardHandle {
+    pub host_port: u16,
+    pub container_port: u16,
+    guard: Option<PortForwardGuard>,
 }
 
 impl PortForwarder {
@@ -56,18 +68,106 @@ impl PortForwarder {
 
     pub async fn forward_port(
         &self,
-        host_port: &str,
-        container_port: &str,
-    ) -> Result<PortForwardGuard> {
-        let logger = self.logger();
+        preferred_host_port: Option<u16>,
+        container_port: u16,
+    ) -> Result<PortForwardHandle> {
+        if container_port == 0 {
+            return Err(miette!("container port must be greater than zero"));
+        }
 
-        let socat_container_name = self
-            .socat_container_name(&logger, host_port)
+        let logger = self.logger();
+        let published_ports = self
+            .dc
+            .published_tcp_ports(&logger)
             .await
-            .wrap_err("failed to determine port-forwarding container name")?;
+            .wrap_err("failed to determine published container ports")?;
+
+        // When no host port was requested, reuse Docker's existing publication instead of
+        // creating a second path through a socat sidecar. Explicit host-port requests still mean
+        // "create this Dockim forwarding", even if Docker already publishes the same container
+        // port elsewhere.
+        if preferred_host_port.is_none() {
+            if let Some(&host_port) = published_ports
+                .get(&container_port)
+                .and_then(|ports| ports.first())
+            {
+                logger.log(
+                    "Using",
+                    &format!(
+                        "Docker-published port {} for container port {}",
+                        host_port, container_port
+                    ),
+                );
+                return Ok(PortForwardHandle::published(host_port, container_port));
+            }
+        }
+
+        let mut host_port = match preferred_host_port {
+            Some(port) if port > 0 => port,
+            Some(_) => return Err(miette!("host port must be greater than zero")),
+            None => self.dc.find_available_host_port().await?,
+        };
+
+        if !self.dc.host_port_is_available(host_port).await {
+            let fallback = self.dc.find_available_host_port().await?;
+            logger.log(
+                "Port",
+                &format!(
+                    "host port {} is already in use; using {} instead",
+                    host_port, fallback
+                ),
+            );
+            host_port = fallback;
+        }
+
+        // The preflight check avoids the common collision case. If another process claims the
+        // port between the check and docker run, retry once with a fresh port. Other failures are
+        // returned immediately so an unavailable image/network is not retried as a port issue.
+        for attempt in 0..2 {
+            let socat_container_name = self
+                .socat_container_name(&logger, &host_port.to_string())
+                .await
+                .wrap_err("failed to determine port-forwarding container name")?;
+
+            match self
+                .launch_socat(&logger, &socat_container_name, host_port, container_port)
+                .await
+            {
+                Ok(()) => {
+                    return Ok(PortForwardHandle::managed(
+                        host_port,
+                        container_port,
+                        self.create_guard(socat_container_name),
+                    ));
+                }
+                Err(_error) if attempt == 0 && !self.dc.host_port_is_available(host_port).await => {
+                    let fallback = self.dc.find_available_host_port().await?;
+                    logger.log(
+                        "Port",
+                        &format!(
+                            "host port {} became unavailable; using {} instead",
+                            host_port, fallback
+                        ),
+                    );
+                    host_port = fallback;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        unreachable!("port-forward retry loop must return after one of its branches")
+    }
+
+    async fn launch_socat(
+        &self,
+        logger: &Logger<'_>,
+        socat_container_name: &str,
+        host_port: u16,
+        container_port: u16,
+    ) -> Result<()> {
         let up_output = self
             .dc
-            .inspect(&logger)
+            .inspect(logger)
             .await
             .wrap_err("failed to get devcontainer status")?;
 
@@ -118,7 +218,7 @@ impl PortForwarder {
                     "--net",
                     container_network_name,
                     "--name",
-                    &socat_container_name,
+                    socat_container_name,
                     "-p",
                     &docker_publish_port,
                     "alpine/socat",
@@ -127,9 +227,7 @@ impl PortForwarder {
                 ],
             )
             .await
-            .wrap_err("failed to launch port-forwarding container")?;
-
-        Ok(self.create_guard(socat_container_name))
+            .wrap_err("failed to launch port-forwarding container")
     }
 
     pub async fn stop_forward_port(&self, host_port: &str) -> Result<()> {
@@ -235,7 +333,7 @@ impl PortForwarder {
             .await
             .wrap_err("failed to get devcontainer status")?;
 
-        Ok(format!("dockim-{}-socat-", up_output.container_id))
+        Ok(port_forward_container_name_prefix(&up_output.container_id))
     }
 
     async fn socat_container_name(&self, logger: &Logger<'_>, host_port: &str) -> Result<String> {
@@ -243,6 +341,30 @@ impl PortForwarder {
             "{}{host_port}",
             self.socat_container_name_prefix(logger).await?
         ))
+    }
+}
+
+impl PortForwardHandle {
+    fn published(host_port: u16, container_port: u16) -> Self {
+        Self {
+            host_port,
+            container_port,
+            guard: None,
+        }
+    }
+
+    fn managed(host_port: u16, container_port: u16, guard: PortForwardGuard) -> Self {
+        Self {
+            host_port,
+            container_port,
+            guard: Some(guard),
+        }
+    }
+}
+
+impl Drop for PortForwardHandle {
+    fn drop(&mut self) {
+        let _ = self.guard.take();
     }
 }
 

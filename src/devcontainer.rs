@@ -1,6 +1,8 @@
 use std::{
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::Write,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::{Component, Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -35,6 +37,35 @@ pub struct UpOutput {
 pub struct ForwardedPort {
     pub host_port: String,
     pub container_port: String,
+}
+
+/// A TCP port currently listening inside the devcontainer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ListeningTcpPort {
+    pub address: IpAddr,
+    pub port: u16,
+}
+
+impl ListeningTcpPort {
+    /// Whether the port can be reached through the container's network address.
+    ///
+    /// Loopback listeners include Docker's internal DNS listener at 127.0.0.11. Neither can be
+    /// reached through the container IP used by a socat sidecar, so auto-forwarding them would
+    /// only create unusable host ports.
+    pub fn is_forwardable(self) -> bool {
+        !self.address.is_loopback()
+    }
+}
+
+/// TCP ports published by Docker on the host for the devcontainer.
+///
+/// The map can contain more than one host binding for a container port (for example when a
+/// Compose configuration publishes on multiple host addresses), so callers should choose a
+/// binding deliberately.
+pub type PublishedTcpPorts = HashMap<u16, Vec<u16>>;
+
+pub fn port_forward_container_name_prefix(container_id: &str) -> String {
+    format!("dockim-{container_id}-socat-")
 }
 
 #[derive(Debug, Clone)]
@@ -532,6 +563,8 @@ impl DevContainer {
     }
 
     pub async fn down(&self, logger: &Logger<'_>) -> Result<()> {
+        self.cleanup_port_forwarders(logger).await?;
+
         if let Some(project_name) = self.get_compose_project_name().await? {
             let containers = self.find_compose_containers(logger, &project_name).await?;
             if containers.is_empty() {
@@ -847,7 +880,7 @@ impl DevContainer {
         // Create and drop the rng before each await point so the future stays Send.
         for _ in 0..1000 {
             let port = { rand::rng().random_range(50000u16..60000u16) };
-            if self.is_host_port_available(port).await {
+            if self.host_port_is_available(port).await {
                 return Ok(port);
             }
         }
@@ -857,13 +890,110 @@ impl DevContainer {
         ))
     }
 
-    async fn is_host_port_available(&self, port: u16) -> bool {
-        TcpListener::bind(("127.0.0.1", port)).await.is_ok()
+    /// Find a TCP port that is not currently listening inside the container.
+    ///
+    /// This is used for services that need to expose a dynamically chosen container-side port,
+    /// such as the Neovim remote server. The range intentionally matches the dynamic host-port
+    /// range while avoiding well-known service ports.
+    pub async fn find_available_container_port(&self, logger: &Logger<'_>) -> Result<u16> {
+        let listening_ports: HashSet<u16> = self
+            .detect_listening_ports(logger)
+            .await?
+            .into_iter()
+            .map(|entry| entry.port)
+            .collect();
+
+        for _ in 0..1000 {
+            let port = { rand::rng().random_range(50000u16..60000u16) };
+            if !listening_ports.contains(&port) {
+                return Ok(port);
+            }
+        }
+
+        Err(miette!(
+            "No available container ports found in range 50000-60000 after 1000 attempts"
+        ))
     }
 
-    /// Detect ports currently listening inside the container by reading /proc/net/tcp and
-    /// /proc/net/tcp6. Returns port numbers in host byte order.
-    pub async fn detect_listening_ports(&self, logger: &Logger<'_>) -> Result<Vec<u16>> {
+    /// Check whether Docker can probably bind a host TCP port.
+    ///
+    /// This is a preflight check only; the actual `docker run -p` operation remains authoritative
+    /// because another process can claim the port between this check and the bind.
+    pub async fn host_port_is_available(&self, port: u16) -> bool {
+        TcpListener::bind(("0.0.0.0", port)).await.is_ok()
+    }
+
+    /// Return TCP ports Docker has already published from the devcontainer to the host.
+    ///
+    /// This deliberately inspects the running container instead of parsing Compose files. It
+    /// therefore also covers `runArgs`, `appPort`, and other Docker-level port publications.
+    pub async fn published_tcp_ports(&self, logger: &Logger<'_>) -> Result<PublishedTcpPorts> {
+        let up_output = self
+            .inspect(logger)
+            .await
+            .wrap_err("failed to get devcontainer status")?;
+        let output = logger
+            .capturing_stdout(
+                "Inspecting",
+                "published container ports",
+                &[
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{ json .NetworkSettings.Ports }}",
+                    &up_output.container_id,
+                ],
+            )
+            .await
+            .wrap_err("failed to inspect published container ports")?;
+
+        parse_published_tcp_ports(&output).wrap_err("failed to parse published container ports")
+    }
+
+    /// Remove Dockim's forwarding sidecars for this devcontainer.
+    ///
+    /// Forwarders are deliberately independent of Compose because they are dynamic and also
+    /// support non-Compose devcontainers. Removing them explicitly before `dockim down` gives
+    /// Compose networks a clean teardown even if the owning interactive process was interrupted.
+    pub async fn cleanup_port_forwarders(&self, logger: &Logger<'_>) -> Result<()> {
+        let Ok(up_output) = self.inspect(logger).await else {
+            return Ok(());
+        };
+        let name_filter = format!(
+            "name={}",
+            port_forward_container_name_prefix(&up_output.container_id)
+        );
+        let output = logger
+            .capturing_stdout(
+                "Listing",
+                "Dockim port-forward containers",
+                &["docker", "ps", "-aq", "--filter", &name_filter],
+            )
+            .await
+            .wrap_err("failed to enumerate Dockim port-forward containers")?;
+        let container_ids: Vec<&str> = output
+            .lines()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .collect();
+        if container_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut args = vec!["docker", "rm", "-f"];
+        args.extend(container_ids);
+        logger
+            .exec("Removing", "Dockim port-forward containers", &args)
+            .await
+            .wrap_err("failed to remove Dockim port-forward containers")
+    }
+
+    /// Detect TCP ports currently listening inside the container by reading /proc/net/tcp and
+    /// /proc/net/tcp6.
+    pub async fn detect_listening_ports(
+        &self,
+        logger: &Logger<'_>,
+    ) -> Result<Vec<ListeningTcpPort>> {
         let output = self
             .exec_capturing_stdout(
                 logger,
@@ -879,28 +1009,7 @@ impl DevContainer {
             .await
             .wrap_err("failed to read /proc/net/tcp inside container")?;
 
-        let mut ports = std::collections::HashSet::new();
-        for line in output.lines().skip(1) {
-            // Fields: sl local_address rem_address st tx_queue rx_queue ...
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            if fields.len() < 4 {
-                continue;
-            }
-            // state 0A = TCP_LISTEN
-            if fields[3] != "0A" {
-                continue;
-            }
-            // local_address is "XXXXXXXX:PPPP" (hex, big-endian for IPv4, little-endian for port)
-            if let Some(port_hex) = fields[1].split(':').nth(1) {
-                if let Ok(port) = u16::from_str_radix(port_hex, 16) {
-                    if port > 0 {
-                        ports.insert(port);
-                    }
-                }
-            }
-        }
-
-        Ok(ports.into_iter().collect())
+        Ok(parse_listening_tcp_ports(&output))
     }
 
     /// Build devcontainer exec args for manual step patterns.
@@ -1051,6 +1160,129 @@ impl DevContainer {
 
         Ok(())
     }
+}
+
+fn parse_listening_tcp_ports(output: &str) -> Vec<ListeningTcpPort> {
+    let mut ports = HashSet::new();
+
+    for line in output.lines().skip(1) {
+        // Fields: sl local_address rem_address st tx_queue rx_queue ...
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 4 || fields[3] != "0A" {
+            continue;
+        }
+
+        let Some((address_hex, port_hex)) = fields[1].split_once(':') else {
+            continue;
+        };
+        let Some(address) = parse_proc_ip_address(address_hex) else {
+            continue;
+        };
+        let Ok(port) = u16::from_str_radix(port_hex, 16) else {
+            continue;
+        };
+        if port > 0 {
+            ports.insert(ListeningTcpPort { address, port });
+        }
+    }
+
+    ports.into_iter().collect()
+}
+
+/// Parse the address representation used by Linux's /proc/net/tcp{,6} files.
+///
+/// IPv4 addresses and each 32-bit word of IPv6 addresses are stored in little-endian byte
+/// order, while the port is a normal hexadecimal integer.
+fn parse_proc_ip_address(value: &str) -> Option<IpAddr> {
+    match value.len() {
+        8 => {
+            let mut octets = [0; 4];
+            for (index, octet) in octets.iter_mut().enumerate() {
+                let offset = (3 - index) * 2;
+                *octet = u8::from_str_radix(&value[offset..offset + 2], 16).ok()?;
+            }
+            Some(IpAddr::V4(Ipv4Addr::from(octets)))
+        }
+        32 => {
+            let mut octets = [0; 16];
+            for word in 0..4 {
+                let word_offset = word * 8;
+                for byte in 0..4 {
+                    let offset = word_offset + (3 - byte) * 2;
+                    octets[word * 4 + byte] =
+                        u8::from_str_radix(&value[offset..offset + 2], 16).ok()?;
+                }
+            }
+            Some(IpAddr::V6(Ipv6Addr::from(octets)))
+        }
+        _ => None,
+    }
+}
+
+fn parse_published_tcp_ports(output: &str) -> Result<PublishedTcpPorts> {
+    let value: Value = serde_json::from_str(output)
+        .into_diagnostic()
+        .wrap_err("invalid Docker port mapping JSON")?;
+
+    let Some(port_mappings) = value.as_object() else {
+        // Docker may report null when the container has no port mappings.
+        return Ok(HashMap::new());
+    };
+
+    let mut published_ports = HashMap::new();
+    for (container_descriptor, bindings) in port_mappings {
+        let Some((container_range, protocol)) = container_descriptor.rsplit_once('/') else {
+            continue;
+        };
+        if protocol != "tcp" {
+            continue;
+        }
+
+        let container_ports = parse_port_range(container_range)
+            .ok_or_else(|| miette!("invalid container port descriptor: {container_descriptor}"))?;
+        let Some(bindings) = bindings.as_array() else {
+            // A null value means the port is exposed but not published on the host.
+            continue;
+        };
+
+        for binding in bindings {
+            let Some(host_port) = binding
+                .get("HostPort")
+                .and_then(Value::as_str)
+                .and_then(|port| port.parse::<u16>().ok())
+                .filter(|&port| port > 0)
+            else {
+                continue;
+            };
+
+            for container_port in &container_ports {
+                published_ports
+                    .entry(*container_port)
+                    .or_insert_with(Vec::new)
+                    .push(host_port);
+            }
+        }
+    }
+
+    for host_ports in published_ports.values_mut() {
+        host_ports.sort_unstable();
+        host_ports.dedup();
+    }
+
+    Ok(published_ports)
+}
+
+fn parse_port_range(descriptor: &str) -> Option<Vec<u16>> {
+    if let Some((start, end)) = descriptor.split_once('-') {
+        let start = start.parse::<u16>().ok()?;
+        let end = end.parse::<u16>().ok()?;
+        if start > end {
+            return None;
+        }
+        return Some((start..=end).collect());
+    }
+
+    Some(vec![descriptor.parse::<u16>().ok()?])
 }
 
 #[derive(Debug)]
@@ -1424,7 +1656,10 @@ async fn resolve_compose_service_names(compose_paths: &[PathBuf]) -> Result<Vec<
 
 #[cfg(test)]
 mod tests {
-    use super::compute_compose_project_name;
+    use super::{
+        compute_compose_project_name, parse_listening_tcp_ports, parse_published_tcp_ports,
+        ListeningTcpPort,
+    };
     use std::{
         ffi::OsString,
         fs,
@@ -1489,6 +1724,81 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn parse_published_tcp_ports_ignores_unpublished_and_udp_ports() {
+        let ports = parse_published_tcp_ports(
+            r#"{
+                "3000/tcp": [{"HostIp":"0.0.0.0","HostPort":"3000"}],
+                "5432/tcp": null,
+                "8123/udp": [{"HostIp":"0.0.0.0","HostPort":"8123"}]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(ports.get(&3000), Some(&vec![3000]));
+        assert!(!ports.contains_key(&5432));
+        assert!(!ports.contains_key(&8123));
+    }
+
+    #[test]
+    fn parse_published_tcp_ports_expands_ranges_and_deduplicates_bindings() {
+        let ports = parse_published_tcp_ports(
+            r#"{
+                "8000-8002/tcp": [
+                    {"HostIp":"0.0.0.0","HostPort":"18000"},
+                    {"HostIp":"127.0.0.1","HostPort":"18000"}
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(ports.get(&8000), Some(&vec![18000]));
+        assert_eq!(ports.get(&8001), Some(&vec![18000]));
+        assert_eq!(ports.get(&8002), Some(&vec![18000]));
+    }
+
+    #[test]
+    fn parse_listening_tcp_ports_keeps_addresses_and_excludes_loopback_from_forwarding() {
+        let ports = parse_listening_tcp_ports(
+            "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n\
+             0: 0100007F:A645 00000000:0000 0A 0 0 0 0 0 0 0 0\n\
+             1: 00000000:D431 00000000:0000 0A 0 0 0 0 0 0 0 0\n\
+             2: 0B00007F:8415 00000000:0000 0A 0 0 0 0 0 0 0 0\n\
+             3: 020012AC:CDC3 00000000:0000 0A 0 0 0 0 0 0 0 0\n\
+             4: 00000000000000000000000001000000:ABED 00000000:0000 0A 0 0 0 0 0 0 0 0\n",
+        );
+
+        assert!(ports.contains(&ListeningTcpPort {
+            address: "127.0.0.1".parse().unwrap(),
+            port: 42565,
+        }));
+        assert!(ports.contains(&ListeningTcpPort {
+            address: "0.0.0.0".parse().unwrap(),
+            port: 54321,
+        }));
+        assert!(ports.contains(&ListeningTcpPort {
+            address: "127.0.0.11".parse().unwrap(),
+            port: 33813,
+        }));
+        assert!(ports.contains(&ListeningTcpPort {
+            address: "172.18.0.2".parse().unwrap(),
+            port: 52675,
+        }));
+        assert!(ports.contains(&ListeningTcpPort {
+            address: "::1".parse().unwrap(),
+            port: 44013,
+        }));
+
+        assert!(ports
+            .iter()
+            .filter(|entry| entry.port == 54321 || entry.port == 52675)
+            .all(|entry| entry.is_forwardable()));
+        assert!(ports
+            .iter()
+            .filter(|entry| matches!(entry.port, 42565 | 33813 | 44013))
+            .all(|entry| !entry.is_forwardable()));
     }
 
     #[tokio::test(flavor = "current_thread")]
