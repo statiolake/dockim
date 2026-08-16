@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     sudo \
     build-essential \
+    golang-go \
     && rm -rf /var/lib/apt/lists/*
 
 ARG USERNAME=vscode

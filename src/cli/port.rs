@@ -1,14 +1,16 @@
-use std::{mem, sync::Arc};
+use std::{mem, path::Path, process::Stdio, sync::Arc, time::Duration};
 
 use itertools::Itertools;
 use miette::{bail, Context, IntoDiagnostic, Result};
-use tokio::task;
+use tokio::{process::Command, task, time::sleep};
 
 use crate::{
-    cli::{Args, PortAddArgs, PortArgs, PortRmArgs, PortSubcommand},
+    cli::{Args, PortAddArgs, PortArgs, PortDaemonArgs, PortRmArgs, PortSubcommand},
     config::Config,
     devcontainer::DevContainer,
+    port_forwarder::run_persistent_daemon,
     port_forwarder::PortForwarder,
+    port_registry,
     progress::Logger,
 };
 
@@ -30,17 +32,14 @@ pub async fn main(
 
     mem::forget(dc.clone().up(logger, false, false).await?);
 
-    // `port add` creates a persistent forwarding: the socat container is intentionally kept alive
-    // until the user explicitly removes it with `port rm`.  To achieve this the PortForwardGuard
-    // is leaked, which also leaks its stop_tx clone and keeps the cleanup channel open
-    // indefinitely.  Passing the caller's JoinSet would therefore cause join_all() to block
-    // forever.  A local JoinSet is used instead so the cleanup task is simply aborted when this
-    // function returns — safe because port teardown is the responsibility of `port rm`, not of
-    // process exit.
-    let forwarder = PortForwarder::new(dc, logger, &mut task::JoinSet::new());
+    let forwarder = PortForwarder::new(dc.clone(), logger);
 
     match &port_args.subcommand {
-        PortSubcommand::Add(add_args) => add_port(logger, &forwarder, add_args).await,
+        PortSubcommand::Add(add_args) => {
+            let workspace_folder = args.resolve_workspace_folder()?;
+            let config_path = args.resolve_config_path()?;
+            add_port(logger, &dc, &workspace_folder, &config_path, add_args).await
+        }
         PortSubcommand::Rm(rm_args) => remove_port(logger, &forwarder, rm_args).await,
         PortSubcommand::Ls(_ls_args) => list_ports(logger, &forwarder).await,
     }
@@ -48,22 +47,91 @@ pub async fn main(
 
 async fn add_port(
     logger: &Logger<'_>,
-    forwarder: &PortForwarder,
+    dc: &Arc<DevContainer>,
+    workspace_folder: &Path,
+    config_path: &Path,
     add_args: &PortAddArgs,
 ) -> Result<()> {
     let (host_port, container_port) = parse_port_descriptor(&add_args.port_descriptor)?;
+    let info = dc
+        .inspect(logger)
+        .await
+        .wrap_err("failed to get devcontainer status")?;
+    let registration_path = port_registry::registration_path(&info.container_id, host_port);
 
-    // We need to forget because forward_port() returns a guard that will stop forwarding on drop
-    let forwarded = forwarder
-        .forward_port(Some(host_port), container_port)
-        .await?;
+    for (_, registration) in port_registry::list()? {
+        if registration.container_id == info.container_id && registration.host_port == host_port {
+            bail!("host port {host_port} already has an active Dockim port forward");
+        }
+    }
 
-    logger.write(&format!(
-        "Port forwarding started: {}:{}",
-        forwarded.host_port, forwarded.container_port
-    ));
-    mem::forget(forwarded);
-    Ok(())
+    let executable = std::env::current_exe()
+        .into_diagnostic()
+        .wrap_err("failed to locate the dockim executable")?;
+    let mut child = Command::new(executable);
+    child
+        .arg("port-daemon")
+        .arg("--workspace-folder")
+        .arg(workspace_folder)
+        .arg("--config-path")
+        .arg(config_path)
+        .arg("--host-port")
+        .arg(host_port.to_string())
+        .arg("--container-port")
+        .arg(container_port.to_string())
+        .arg("--expected-container-id")
+        .arg(&info.container_id)
+        .arg("--registration-path")
+        .arg(&registration_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let mut child = child
+        .spawn()
+        .into_diagnostic()
+        .wrap_err("failed to start persistent port-forward daemon")?;
+
+    // The daemon writes its registration only after the local listener and embedded helper are
+    // ready. Wait briefly so `port add` does not report success for a process that failed to bind
+    // the requested port or install the helper.
+    for _ in 0..200 {
+        if let Some((_, registration)) = port_registry::list()?
+            .into_iter()
+            .find(|(path, _)| path == &registration_path)
+        {
+            logger.write(&format!(
+                "Port forwarding started: {}:{}",
+                registration.host_port, registration.container_port
+            ));
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait().into_diagnostic()? {
+            bail!("port-forward daemon exited unsuccessfully: {status}");
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    let _ = child.kill().await;
+    bail!("timed out waiting for port-forward daemon to start");
+}
+
+pub async fn daemon_main(logger: &Logger<'_>, args: &PortDaemonArgs) -> Result<()> {
+    let dc = Arc::new(
+        DevContainer::new(args.workspace_folder.clone(), args.config_path.clone())
+            .await
+            .wrap_err("failed to initialize devcontainer client")?,
+    );
+
+    run_persistent_daemon(
+        dc,
+        logger,
+        args.host_port,
+        args.container_port,
+        &args.expected_container_id,
+        args.registration_path.clone(),
+    )
+    .await
 }
 
 async fn remove_port(

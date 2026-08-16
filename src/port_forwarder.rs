@@ -1,31 +1,36 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{sync::Arc, time::Duration};
 
-use miette::{miette, IntoDiagnostic, Result, WrapErr};
-use serde::Deserialize;
-use tokio::{sync::mpsc, task::JoinSet};
+use miette::{bail, miette, IntoDiagnostic, Result, WrapErr};
+use rand::Rng;
+use tokio::{
+    io,
+    net::{TcpListener, TcpStream},
+    process::Child,
+    sync::Mutex,
+    task::JoinSet,
+    time::sleep,
+};
 
 use crate::{
-    devcontainer::{port_forward_container_name_prefix, DevContainer, ForwardedPort},
+    devcontainer::{DevContainer, ForwardedPort, RootMode, UpOutput},
+    embedded_forwarder,
+    port_registry::{self, ForwardOwner, ForwardRegistration},
     progress::Logger,
 };
 
-/// Centralized port-forwarding manager.
+/// Unified host-side port-forward manager.
 ///
-/// Stores a Console + verbose for creating Logger instances on demand.
-/// Logger is `!Clone` by design, so background tasks create their own
-/// root-level Loggers from the stored Console.
+/// Docker-published ports are reused directly. Every other forwarding is a local TCP listener;
+/// each accepted connection gets a non-TTY `docker exec -i` process whose stdin/stdout carry the
+/// connection bytes to the embedded forwarder inside the devcontainer.
 pub struct PortForwarder {
     dc: Arc<DevContainer>,
     console: crate::console::Console,
     verbose: bool,
-    stop_tx: std::sync::Mutex<Option<mpsc::UnboundedSender<String>>>,
+    helper_path: Mutex<Option<String>>,
 }
 
 /// A port forwarding owned by a [`PortForwarder`].
-///
-/// The handle can represent either a socat container created by Dockim or an existing Docker
-/// publication. In the latter case dropping the handle is a no-op because Dockim does not own the
-/// Docker publication.
 #[derive(Debug)]
 pub struct PortForwardHandle {
     pub host_port: u16,
@@ -33,43 +38,52 @@ pub struct PortForwardHandle {
     guard: Option<PortForwardGuard>,
 }
 
+#[derive(Debug)]
+struct PortForwardGuard {
+    task: tokio::task::AbortHandle,
+    registration_path: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+struct ForwardTarget {
+    info: UpOutput,
+    helper_path: String,
+    container_host: String,
+}
+
 impl PortForwarder {
-    pub fn new(dc: Arc<DevContainer>, logger: &Logger<'_>, join_set: &mut JoinSet<()>) -> Self {
-        let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<String>();
-        let bg_console = logger.console().clone();
-        let verbose = logger.verbose();
-        join_set.spawn(async move {
-            while let Some(container_name) = stop_rx.recv().await {
-                let bg_logger = Logger::new(bg_console.clone(), verbose);
-                let _ = bg_logger
-                    .exec(
-                        "Stopping",
-                        "port-forward container",
-                        &["docker", "stop", &container_name],
-                    )
-                    .await;
-            }
-        });
+    pub fn new(dc: Arc<DevContainer>, logger: &Logger<'_>) -> Self {
         Self {
             dc,
             console: logger.console().clone(),
-            verbose,
-            stop_tx: std::sync::Mutex::new(Some(stop_tx)),
+            verbose: logger.verbose(),
+            helper_path: Mutex::new(None),
         }
-    }
-
-    pub fn shutdown(&self) {
-        self.stop_tx.lock().unwrap().take();
     }
 
     fn logger(&self) -> Logger<'static> {
         Logger::new(self.console.clone(), self.verbose)
     }
 
+    /// Start one forwarding listener. The returned handle owns its listener and all connection
+    /// workers; dropping it stops the forwarding.
     pub async fn forward_port(
         &self,
         preferred_host_port: Option<u16>,
         container_port: u16,
+    ) -> Result<PortForwardHandle> {
+        self.forward_port_at(preferred_host_port, container_port, "127.0.0.1")
+            .await
+    }
+
+    /// Start a forwarding listener and connect each accepted stream to a specific address inside
+    /// the container. Automatic discovery uses this for IPv4/IPv6 loopback listeners; ordinary
+    /// callers can use [`Self::forward_port`] and get IPv4 loopback semantics.
+    pub async fn forward_port_at(
+        &self,
+        preferred_host_port: Option<u16>,
+        container_port: u16,
+        container_host: &str,
     ) -> Result<PortForwardHandle> {
         if container_port == 0 {
             return Err(miette!("container port must be greater than zero"));
@@ -82,10 +96,8 @@ impl PortForwarder {
             .await
             .wrap_err("failed to determine published container ports")?;
 
-        // When no host port was requested, reuse Docker's existing publication instead of
-        // creating a second path through a socat sidecar. Explicit host-port requests still mean
-        // "create this Dockim forwarding", even if Docker already publishes the same container
-        // port elsewhere.
+        // A Docker publication already has a host-side transport. Only create an ExecTunnel when
+        // the caller explicitly requested a host binding or when no publication exists.
         if preferred_host_port.is_none() {
             if let Some(&host_port) = published_ports
                 .get(&container_port)
@@ -102,245 +114,224 @@ impl PortForwarder {
             }
         }
 
-        let mut host_port = match preferred_host_port {
-            Some(port) if port > 0 => port,
-            Some(_) => return Err(miette!("host port must be greater than zero")),
-            None => self.dc.find_available_host_port().await?,
-        };
+        let info = self
+            .dc
+            .inspect(&logger)
+            .await
+            .wrap_err("failed to get devcontainer status")?;
+        let helper_path = self
+            .ensure_forwarder(&logger)
+            .await
+            .wrap_err("failed to prepare port-forward helper")?;
+        let (listener, host_port) = self
+            .bind_host_listener(&logger, preferred_host_port)
+            .await?;
 
-        if !self.dc.host_port_is_available(host_port).await {
-            let fallback = self.dc.find_available_host_port().await?;
-            logger.log(
-                "Port",
-                &format!(
-                    "host port {} is already in use; using {} instead",
-                    host_port, fallback
-                ),
-            );
-            host_port = fallback;
+        let target = ForwardTarget {
+            info,
+            helper_path,
+            container_host: container_host.to_string(),
+        };
+        let task = tokio::spawn(run_forward(
+            listener,
+            self.dc.clone(),
+            target,
+            container_port,
+        ));
+        Ok(PortForwardHandle::managed(
+            host_port,
+            container_port,
+            task.abort_handle(),
+        ))
+    }
+
+    /// Register a forwarding owned by the current interactive Dockim process so that another
+    /// command, such as `dockim port ls`, can observe it while the session is running.
+    pub async fn register_session_forward(&self, handle: &mut PortForwardHandle) -> Result<()> {
+        let logger = self.logger();
+        let info = self
+            .dc
+            .inspect(&logger)
+            .await
+            .wrap_err("failed to get devcontainer status")?;
+        handle.register(
+            &info.container_id,
+            ForwardOwner::Session,
+            std::process::id(),
+        )
+    }
+
+    async fn ensure_forwarder(&self, logger: &Logger<'_>) -> Result<String> {
+        let mut helper_path = self.helper_path.lock().await;
+        if let Some(path) = helper_path.as_ref() {
+            return Ok(path.clone());
         }
 
-        // The preflight check avoids the common collision case. If another process claims the
-        // port between the check and docker run, retry once with a fresh port. Other failures are
-        // returned immediately so an unavailable image/network is not retried as a port issue.
-        for attempt in 0..2 {
-            let socat_container_name = self
-                .socat_container_name(&logger, &host_port.to_string())
-                .await
-                .wrap_err("failed to determine port-forwarding container name")?;
+        let machine = self
+            .dc
+            .exec_capturing_stdout(
+                logger,
+                "Detecting",
+                "container architecture",
+                &["uname", "-m"],
+                RootMode::No,
+            )
+            .await
+            .wrap_err("failed to detect container architecture")?;
+        let (architecture, bytes) = embedded_forwarder::for_machine(&machine).ok_or_else(|| {
+            miette!(
+                "unsupported devcontainer architecture `{}`; supported architectures are amd64 and arm64",
+                machine.trim()
+            )
+        })?;
+        let path = format!("/tmp/dockim-forwarder-{architecture}");
 
-            match self
-                .launch_socat(&logger, &socat_container_name, host_port, container_port)
-                .await
-            {
-                Ok(()) => {
-                    return Ok(PortForwardHandle::managed(
-                        host_port,
-                        container_port,
-                        self.create_guard(socat_container_name),
-                    ));
+        self.dc
+            .copy_bytes_to_container(logger, &path, bytes, RootMode::No)
+            .await
+            .wrap_err_with(|| format!("failed to install {architecture} port-forward helper"))?;
+
+        // Keep the path only after the copy succeeded. Concurrent listeners share this installation
+        // lock, so one Dockim process never writes the helper while another connection starts it.
+        *helper_path = Some(path.clone());
+        Ok(path)
+    }
+
+    async fn bind_host_listener(
+        &self,
+        logger: &Logger<'_>,
+        preferred_host_port: Option<u16>,
+    ) -> Result<(TcpListener, u16)> {
+        if let Some(port) = preferred_host_port {
+            if port == 0 {
+                bail!("host port must be greater than zero");
+            }
+
+            match TcpListener::bind(("127.0.0.1", port)).await {
+                Ok(listener) => return Ok((listener, port)),
+                Err(error) if error.kind() != std::io::ErrorKind::AddrInUse => {
+                    return Err(error)
+                        .into_diagnostic()
+                        .wrap_err_with(|| format!("failed to bind host port {port}"));
                 }
-                Err(_error) if attempt == 0 && !self.dc.host_port_is_available(host_port).await => {
-                    let fallback = self.dc.find_available_host_port().await?;
+                Err(_) => {
+                    let fallback = self.find_host_listener().await?;
                     logger.log(
                         "Port",
                         &format!(
-                            "host port {} became unavailable; using {} instead",
-                            host_port, fallback
+                            "host port {} is already in use; using {} instead",
+                            port, fallback.1
                         ),
                     );
-                    host_port = fallback;
+                    return Ok(fallback);
                 }
-                Err(error) => return Err(error),
             }
         }
 
-        unreachable!("port-forward retry loop must return after one of its branches")
+        self.find_host_listener().await
     }
 
-    async fn launch_socat(
-        &self,
-        logger: &Logger<'_>,
-        socat_container_name: &str,
-        host_port: u16,
-        container_port: u16,
-    ) -> Result<()> {
-        let up_output = self
+    async fn find_host_listener(&self) -> Result<(TcpListener, u16)> {
+        for _ in 0..1000 {
+            let port = { rand::rng().random_range(50000u16..60000u16) };
+            match TcpListener::bind(("127.0.0.1", port)).await {
+                Ok(listener) => return Ok((listener, port)),
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+                Err(error) => {
+                    return Err(error)
+                        .into_diagnostic()
+                        .wrap_err("failed to bind dynamic host port");
+                }
+            }
+        }
+
+        Err(miette!(
+            "no available host ports found in range 50000-60000 after 1000 attempts"
+        ))
+    }
+
+    /// Stop a persistent host-side daemon, and also remove a pre-ExecTunnel socat container if
+    /// one was left behind by an older Dockim process.
+    pub async fn stop_forward_port(&self, host_port: &str) -> Result<()> {
+        let host_port = host_port
+            .parse::<u16>()
+            .into_diagnostic()
+            .wrap_err("invalid host port")?;
+        let logger = self.logger();
+        let info = self
             .dc
-            .inspect(logger)
+            .inspect(&logger)
             .await
             .wrap_err("failed to get devcontainer status")?;
 
-        #[derive(Debug, Deserialize)]
-        struct ContainerNetwork {
-            #[serde(rename = "IPAddress")]
-            ip_address: String,
+        let mut stopped_daemon = false;
+        for (_, registration) in port_registry::list()? {
+            if registration.container_id == info.container_id && registration.host_port == host_port
+            {
+                match registration.owner {
+                    ForwardOwner::Daemon => {
+                        port_registry::terminate(registration.pid)?;
+                        stopped_daemon = true;
+                    }
+                    ForwardOwner::Session => {
+                        bail!(
+                            "port forwarding {host_port} is owned by an active Dockim session; stop that session to remove it"
+                        );
+                    }
+                }
+            }
         }
 
-        let network_output = logger
-            .capturing_stdout(
-                "Inspecting",
-                "container network settings",
-                &[
-                    "docker",
-                    "inspect",
-                    "--format",
-                    "{{ json .NetworkSettings.Networks }}",
-                    &up_output.container_id,
-                ],
-            )
-            .await?;
-        let container_networks: HashMap<String, ContainerNetwork> =
-            serde_json::from_str(&network_output)
-                .into_diagnostic()
-                .wrap_err("failed to parse container network settings")?;
-
-        let (container_network_name, container_network) = container_networks
-            .iter()
-            .next()
-            .ok_or_else(|| miette!("failed to get container network"))?;
-
-        let docker_publish_port = format!("{host_port}:1234");
-        let socat_target = format!(
-            "TCP-CONNECT:{}:{}",
-            container_network.ip_address, container_port
-        );
-
-        logger
-            .exec(
-                "Launching",
-                "port-forward container",
-                &[
-                    "docker",
-                    "run",
-                    "-d",
-                    "--rm",
-                    "--net",
-                    container_network_name,
-                    "--name",
-                    socat_container_name,
-                    "-p",
-                    &docker_publish_port,
-                    "alpine/socat",
-                    "TCP-LISTEN:1234,fork",
-                    &socat_target,
-                ],
-            )
-            .await
-            .wrap_err("failed to launch port-forwarding container")
-    }
-
-    pub async fn stop_forward_port(&self, host_port: &str) -> Result<()> {
-        let logger = self.logger();
-        let socat_container_name = self
-            .socat_container_name(&logger, host_port)
-            .await
-            .wrap_err("failed to determine port-forwarding container name")?;
-        logger
-            .exec(
-                "Stopping",
-                "port-forward container",
-                &["docker", "stop", &socat_container_name],
-            )
-            .await
+        if !stopped_daemon {
+            // This is migration cleanup only; new forwardings never create sidecars.
+            let legacy_name = format!("dockim-{}-socat-{host_port}", info.container_id);
+            logger
+                .try_exec(
+                    "Stopping",
+                    "legacy port-forward container",
+                    &["docker", "rm", "-f", &legacy_name],
+                )
+                .await;
+        }
+        Ok(())
     }
 
     pub async fn list_forwarded_ports(&self) -> Result<Vec<ForwardedPort>> {
         let logger = self.logger();
-        let socat_container_name_prefix = self
-            .socat_container_name_prefix(&logger)
-            .await
-            .wrap_err("failed to determine port-forwarding container name")?;
-
-        let name_filter = format!("name={socat_container_name_prefix}");
-        let port_forward_containers = logger
-            .capturing_stdout(
-                "Listing",
-                "port-forward containers",
-                &[
-                    "docker",
-                    "ps",
-                    "--filter",
-                    &name_filter,
-                    "--format",
-                    "{{.Names}}\t{{.Command}}",
-                    "--no-trunc",
-                ],
-            )
-            .await
-            .wrap_err("failed to enumerate port-forwarding containers")?;
-
-        let mut ports = Vec::new();
-        for line in port_forward_containers.lines() {
-            let Some((name, command)) = line.split_once('\t') else {
-                continue;
-            };
-
-            let Some(host_port) = name.split('-').next_back() else {
-                continue;
-            };
-
-            let container_port = command
-                .split_whitespace()
-                .find_map(|arg| {
-                    if !arg.contains("TCP-CONNECT:") {
-                        return None;
-                    }
-                    arg.split("TCP-CONNECT:")
-                        .nth(1)?
-                        .split(':')
-                        .nth(1)?
-                        .trim_end_matches('"')
-                        .into()
-                })
-                .unwrap_or("unknown");
-
-            ports.push(ForwardedPort {
-                host_port: host_port.to_string(),
-                container_port: container_port.to_string(),
-            });
-        }
-
-        Ok(ports)
-    }
-
-    pub async fn remove_all_forwarded_ports(&self) -> Result<()> {
-        let ports = self.list_forwarded_ports().await?;
-
-        for port in ports {
-            self.stop_forward_port(&port.host_port).await?;
-        }
-
-        Ok(())
-    }
-
-    fn create_guard(&self, socat_container_name: String) -> PortForwardGuard {
-        let stop_tx = self.stop_tx.lock().unwrap();
-        let stop_tx = stop_tx
-            .as_ref()
-            .expect("cannot create guard after shutdown")
-            .clone();
-        PortForwardGuard {
-            socat_container_name,
-            stop_tx,
-        }
-    }
-
-    async fn socat_container_name_prefix(&self, logger: &Logger<'_>) -> Result<String> {
-        let up_output = self
+        let info = self
             .dc
-            .inspect(logger)
+            .inspect(&logger)
             .await
             .wrap_err("failed to get devcontainer status")?;
 
-        Ok(port_forward_container_name_prefix(&up_output.container_id))
+        Ok(port_registry::list()?
+            .into_iter()
+            .filter(|(_, registration)| registration.container_id == info.container_id)
+            .map(|(_, registration)| ForwardedPort {
+                host_port: registration.host_port.to_string(),
+                container_port: registration.container_port.to_string(),
+            })
+            .collect())
     }
 
-    async fn socat_container_name(&self, logger: &Logger<'_>, host_port: &str) -> Result<String> {
-        Ok(format!(
-            "{}{host_port}",
-            self.socat_container_name_prefix(logger).await?
-        ))
+    pub async fn remove_all_forwarded_ports(&self) -> Result<()> {
+        let logger = self.logger();
+        let info = self
+            .dc
+            .inspect(&logger)
+            .await
+            .wrap_err("failed to get devcontainer status")?;
+
+        for (_, registration) in port_registry::list()? {
+            if registration.container_id == info.container_id {
+                if registration.owner == ForwardOwner::Daemon {
+                    port_registry::terminate(registration.pid)?;
+                }
+            }
+        }
+
+        // Remove stale sidecars from releases that used the old transport.
+        self.dc.cleanup_port_forwarders(&logger).await
     }
 }
 
@@ -353,35 +344,188 @@ impl PortForwardHandle {
         }
     }
 
-    fn managed(host_port: u16, container_port: u16, guard: PortForwardGuard) -> Self {
+    fn managed(host_port: u16, container_port: u16, task: tokio::task::AbortHandle) -> Self {
         Self {
             host_port,
             container_port,
-            guard: Some(guard),
+            guard: Some(PortForwardGuard {
+                task,
+                registration_path: None,
+            }),
         }
+    }
+
+    fn register(&mut self, container_id: &str, owner: ForwardOwner, pid: u32) -> Result<()> {
+        let guard = self
+            .guard
+            .as_mut()
+            .ok_or_else(|| miette!("cannot register a Docker-published port forwarding"))?;
+        let path = port_registry::registration_path(container_id, self.host_port);
+        port_registry::write(
+            &path,
+            &ForwardRegistration {
+                pid,
+                container_id: container_id.to_string(),
+                host_port: self.host_port,
+                container_port: self.container_port,
+                owner,
+            },
+        )?;
+        guard.registration_path = Some(path);
+        Ok(())
     }
 }
 
 impl Drop for PortForwardHandle {
     fn drop(&mut self) {
-        let _ = self.guard.take();
+        if let Some(guard) = self.guard.take() {
+            guard.task.abort();
+            if let Some(path) = guard.registration_path {
+                let _ = port_registry::remove(&path);
+            }
+        }
     }
 }
 
-impl Drop for PortForwarder {
-    fn drop(&mut self) {
-        self.shutdown();
+async fn run_forward(
+    listener: TcpListener,
+    dc: Arc<DevContainer>,
+    target: ForwardTarget,
+    container_port: u16,
+) {
+    let mut connections = JoinSet::new();
+
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => {
+                let Ok((stream, _address)) = accepted else { break };
+                let dc = dc.clone();
+                let target = target.clone();
+                connections.spawn(async move {
+                    let _ = forward_connection(stream, dc, target, container_port).await;
+                });
+            }
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
+        }
     }
 }
 
-#[derive(Debug)]
-pub struct PortForwardGuard {
-    socat_container_name: String,
-    stop_tx: mpsc::UnboundedSender<String>,
+async fn forward_connection(
+    stream: TcpStream,
+    dc: Arc<DevContainer>,
+    target: ForwardTarget,
+    container_port: u16,
+) -> Result<()> {
+    let command = vec![
+        target.helper_path,
+        format_target_address(&target.container_host, container_port),
+    ];
+    let mut child: Child = dc.spawn_piped_exec(&target.info, &command)?;
+    let mut child_stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| miette!("Docker exec helper stdin was not piped"))?;
+    let mut child_stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| miette!("Docker exec helper stdout was not piped"))?;
+    let (mut socket_read, mut socket_write) = stream.into_split();
+
+    let mut upload =
+        tokio::spawn(async move { io::copy(&mut socket_read, &mut child_stdin).await });
+    let mut download =
+        tokio::spawn(async move { io::copy(&mut child_stdout, &mut socket_write).await });
+
+    tokio::select! {
+        _ = &mut upload => {
+            download.abort();
+            let _ = download.await;
+        }
+        _ = &mut download => {
+            upload.abort();
+            let _ = upload.await;
+        }
+    }
+
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+    Ok(())
 }
 
-impl Drop for PortForwardGuard {
-    fn drop(&mut self) {
-        let _ = self.stop_tx.send(self.socat_container_name.clone());
+fn format_target_address(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
     }
+}
+
+/// Run a persistent host-side daemon for `dockim port add`.
+pub async fn run_persistent_daemon(
+    dc: Arc<DevContainer>,
+    logger: &Logger<'_>,
+    host_port: u16,
+    container_port: u16,
+    expected_container_id: &str,
+    registration_path: std::path::PathBuf,
+) -> Result<()> {
+    let forwarder = PortForwarder::new(dc.clone(), logger);
+    let info = dc
+        .inspect(logger)
+        .await
+        .wrap_err("failed to get devcontainer status")?;
+    if info.container_id != expected_container_id {
+        bail!(
+            "devcontainer changed while starting port forward (expected {}, found {})",
+            expected_container_id,
+            info.container_id
+        );
+    }
+
+    let handle = forwarder
+        .forward_port(Some(host_port), container_port)
+        .await?;
+    port_registry::write(
+        &registration_path,
+        &ForwardRegistration {
+            pid: std::process::id(),
+            container_id: info.container_id.clone(),
+            host_port: handle.host_port,
+            container_port: handle.container_port,
+            owner: ForwardOwner::Daemon,
+        },
+    )?;
+
+    wait_for_container_or_shutdown(&dc, &info.container_id).await?;
+
+    port_registry::remove(&registration_path)?;
+    drop(handle);
+    Ok(())
+}
+
+async fn wait_for_container_or_shutdown(dc: &DevContainer, container_id: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .into_diagnostic()
+                .wrap_err("failed to install port-forward daemon shutdown handler")?;
+        loop {
+            tokio::select! {
+                _ = terminate.recv() => break,
+                _ = sleep(Duration::from_secs(2)) => {
+                    if !dc.is_container_running(container_id).await {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    while dc.is_container_running(container_id).await {
+        sleep(Duration::from_secs(2)).await;
+    }
+
+    Ok(())
 }

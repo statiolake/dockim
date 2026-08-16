@@ -1,4 +1,9 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    sync::Arc,
+    time::Duration,
+};
 
 use tokio::{sync::oneshot, task::JoinSet, time::sleep};
 
@@ -9,8 +14,8 @@ use crate::{
     progress::Logger,
 };
 
-/// Watches network-reachable ports listening inside the container and automatically forwards new
-/// ones to the host. Polling interval is 2 seconds. Port numbers <= 1024, loopback-only ports,
+/// Watches ports listening inside the container and automatically forwards new ones to the host.
+/// Polling interval is 2 seconds. Port numbers <= 1024, Docker's embedded DNS listener,
 /// Docker-published ports, and any ports listed in `reserved_ports` are ignored.
 ///
 /// All forwarded ports are cleaned up automatically when `shutdown()` is called (or on `Drop`).
@@ -95,7 +100,7 @@ async fn run_auto_forward(
             }
         };
 
-        let listening_set: std::collections::HashSet<u16> = listening
+        let listening_by_port: HashMap<u16, String> = listening
             .into_iter()
             .filter(|entry| {
                 entry.is_forwardable()
@@ -103,20 +108,32 @@ async fn run_auto_forward(
                     && !reserved_ports.contains(&entry.port)
                     && !published_ports.contains_key(&entry.port)
             })
-            .map(|entry| entry.port)
+            .map(|entry| (entry.port, forwarding_address(entry.address)))
             .collect();
+        let listening_set: std::collections::HashSet<u16> =
+            listening_by_port.keys().copied().collect();
 
         // Forward newly-appeared ports.
-        for &container_port in &listening_set {
+        for (&container_port, container_host) in &listening_by_port {
             if forwarded.contains_key(&container_port) {
                 continue;
             }
 
             match manager
-                .forward_port(Some(container_port), container_port)
+                .forward_port_at(Some(container_port), container_port, container_host)
                 .await
             {
-                Ok(guard) => {
+                Ok(mut guard) => {
+                    if let Err(error) = manager.register_session_forward(&mut guard).await {
+                        logger.log(
+                            "AutoForward",
+                            &format!(
+                                "failed to register container port {}: {}",
+                                container_port, error
+                            ),
+                        );
+                        continue;
+                    }
                     logger.log(
                         "AutoForward",
                         &format!(
@@ -143,7 +160,7 @@ async fn run_auto_forward(
             .collect();
         for container_port in closed_ports {
             if let Some(guard) = forwarded.remove(&container_port) {
-                // guard is dropped here, which sends a stop message to the manager
+                // Dropping the guard closes the listener and removes its session registration.
                 logger.log(
                     "AutoForward",
                     &format!(
@@ -155,6 +172,14 @@ async fn run_auto_forward(
         }
     }
 
-    // Drop all guards, sending stop messages to the manager.
+    // Drop all guards, closing listeners and removing their session registrations.
     drop(forwarded);
+}
+
+fn forwarding_address(address: IpAddr) -> String {
+    match address {
+        IpAddr::V4(address) if address == Ipv4Addr::UNSPECIFIED => Ipv4Addr::LOCALHOST.to_string(),
+        IpAddr::V6(address) if address == Ipv6Addr::UNSPECIFIED => Ipv6Addr::LOCALHOST.to_string(),
+        address => address.to_string(),
+    }
 }

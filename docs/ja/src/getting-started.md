@@ -18,6 +18,11 @@ Dockim をインストールする前に、以下の前提条件がシステム�
 - **インストール**: `npm install -g @devcontainers/cli`
 - **確認**: `devcontainer --version` を実行してインストールを確認
 
+**Go**
+- **目的**: コンテナ内で実行する静的リンクのポートフォワード helper をビルドします
+- **インストール**: [Go のインストールガイド](https://go.dev/doc/install/)を参照
+- **確認**: `go version` を実行してインストールを確認
+
 ### 任意ですが推奨
 
 **Neovim**

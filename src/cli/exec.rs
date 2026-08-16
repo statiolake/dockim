@@ -31,7 +31,7 @@ pub async fn main(
 
     mem::forget(dc.clone().up(logger, exec_args.rebuild, false).await?);
 
-    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger, join_set));
+    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger));
     let _auto_forwarder =
         AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], logger, join_set);
 

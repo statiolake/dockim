@@ -18,6 +18,11 @@ Before installing Dockim, ensure you have the following prerequisites installed 
 - **Installation**: `npm install -g @devcontainers/cli`
 - **Verification**: Run `devcontainer --version` to confirm installation
 
+**Go**
+- **Purpose**: Builds Dockim's statically linked in-container port-forward helper
+- **Installation**: Follow [Go's installation guide](https://go.dev/doc/install/)
+- **Verification**: Run `go version` to confirm installation
+
 ### Optional but Recommended
 
 **Neovim**

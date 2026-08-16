@@ -125,11 +125,17 @@ dockim up --auto-ports
 # Dockim will scan for listening ports and forward them
 ```
 
-Only TCP listeners reachable through the container's network interface are considered. Loopback
-listeners (including Docker's internal DNS listener) are ignored because a sidecar connected to
-the container network cannot reach them. Ports already published by Docker or Docker Compose are
-not forwarded a second time. Dockim checks the running devcontainer's `NetworkSettings.Ports`
-rather than trying to duplicate the Compose `ports:` mapping.
+Dockim polls TCP listeners inside the container every two seconds. Ports already published by
+Docker or Docker Compose are reused directly and are not forwarded a second time. Other listeners
+use a host-side TCP listener and a Docker exec stdio tunnel; this also supports ordinary
+`127.0.0.1` services such as review-relay.nvim. Docker's embedded DNS listener at `127.0.0.11`
+is excluded by address, not by guessing its opaque implementation port. Dockim checks the running
+devcontainer's `NetworkSettings.Ports` rather than trying to duplicate the Compose `ports:` mapping.
+
+Automatic forwards also appear in `dockim port ls` while a `bash`, `shell`, or `exec` Dockim
+session is running, and are removed when that session exits. Persistent `dockim port add` rules
+run in a small host-side daemon. The daemon exits automatically when its devcontainer disappears,
+including after `docker compose down`.
 
 ## Application-Specific Scenarios
 

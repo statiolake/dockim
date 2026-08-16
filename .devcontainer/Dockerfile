@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y \
     git \
     sudo \
     curl \
+    golang-go \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js and npm (for Claude Code)

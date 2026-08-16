@@ -15,7 +15,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tar;
 use tempfile::{NamedTempFile, TempPath};
-use tokio::{net::TcpListener, process::Child, runtime::Handle, sync::Mutex, task};
+use tokio::{
+    net::TcpListener,
+    process::{Child, Command},
+    runtime::Handle,
+    sync::Mutex,
+    task,
+};
 
 use crate::{exec::ExecOutput, progress::Logger};
 
@@ -47,13 +53,14 @@ pub struct ListeningTcpPort {
 }
 
 impl ListeningTcpPort {
-    /// Whether the port can be reached through the container's network address.
+    /// Whether Dockim should consider this port for automatic forwarding.
     ///
-    /// Loopback listeners include Docker's internal DNS listener at 127.0.0.11. Neither can be
-    /// reached through the container IP used by a socat sidecar, so auto-forwarding them would
-    /// only create unusable host ports.
+    /// The exec tunnel can reach ordinary loopback services, but Docker's embedded DNS listener
+    /// is an implementation detail rather than an application service. Its backing socket is
+    /// exposed at 127.0.0.11, sometimes on an opaque internal port, so filter by address rather
+    /// than by a guessed port number.
     pub fn is_forwardable(self) -> bool {
-        !self.address.is_loopback()
+        self.address != IpAddr::V4(Ipv4Addr::new(127, 0, 0, 11))
     }
 }
 
@@ -660,6 +667,34 @@ impl DevContainer {
         logger.spawn(verb, desc, &args).await
     }
 
+    /// Spawn a non-TTY Docker exec process whose stdin/stdout can carry arbitrary bytes.
+    ///
+    /// This is used by the port-forward data plane. It intentionally avoids the progress logger
+    /// and does not allocate a TTY: terminal framing would corrupt a TCP stream.
+    pub fn spawn_piped_exec(&self, info: &UpOutput, command: &[String]) -> Result<Child> {
+        let mut args = vec![
+            "exec".to_string(),
+            "-i".to_string(),
+            "-u".to_string(),
+            info.remote_user.clone(),
+            "-w".to_string(),
+            info.remote_workspace_folder.clone(),
+            info.container_id.clone(),
+        ];
+        args.extend(command.iter().cloned());
+
+        Command::new("docker")
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .process_group(0)
+            .spawn()
+            .into_diagnostic()
+            .wrap_err("failed to spawn Docker exec port-forward helper")
+    }
+
     pub async fn exec<S: AsRef<str>>(
         &self,
         logger: &Logger<'_>,
@@ -836,6 +871,50 @@ impl DevContainer {
         Ok(())
     }
 
+    /// Copy an executable byte sequence into an absolute path in the container.
+    ///
+    /// This uses the same tar-over-`docker exec` mechanism as regular file copying, but preserves
+    /// executable permissions. The caller is responsible for choosing a writable destination;
+    /// Dockim uses `/tmp` so it does not modify the image or the workspace.
+    pub async fn copy_bytes_to_container(
+        &self,
+        logger: &Logger<'_>,
+        destination: &str,
+        bytes: &[u8],
+        root_mode: RootMode,
+    ) -> Result<()> {
+        let mut tar_data = Vec::new();
+        {
+            let mut tar_builder = tar::Builder::new(&mut tar_data);
+            let mut content = bytes;
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+
+            let tar_path = destination.strip_prefix('/').unwrap_or(destination);
+            tar_builder
+                .append_data(&mut header, tar_path, &mut content)
+                .into_diagnostic()
+                .wrap_err("failed to add embedded port-forward helper to tar archive")?;
+            tar_builder
+                .finish()
+                .into_diagnostic()
+                .wrap_err("failed to finalize port-forward helper archive")?;
+        }
+
+        self.exec_with_bytes_stdin(
+            logger,
+            "Installing",
+            "port-forward helper",
+            &["tar", "-xpf", "-", "-C", "/"],
+            &tar_data,
+            root_mode,
+        )
+        .await
+        .wrap_err("failed to extract embedded port-forward helper in container")
+    }
+
     async fn create_tar_archive(file_mappings: &[(PathBuf, String)]) -> Result<Vec<u8>> {
         let mut tar_data = Vec::new();
 
@@ -915,12 +994,26 @@ impl DevContainer {
         ))
     }
 
-    /// Check whether Docker can probably bind a host TCP port.
+    /// Check whether Dockim can probably bind a local host TCP port.
     ///
     /// This is a preflight check only; the actual `docker run -p` operation remains authoritative
     /// because another process can claim the port between this check and the bind.
     pub async fn host_port_is_available(&self, port: u16) -> bool {
-        TcpListener::bind(("0.0.0.0", port)).await.is_ok()
+        TcpListener::bind(("127.0.0.1", port)).await.is_ok()
+    }
+
+    /// Check a specific container ID without using the cached devcontainer inspection result.
+    /// This is used by persistent port-forward daemons so they exit when `compose down` removes
+    /// the container.
+    pub async fn is_container_running(&self, container_id: &str) -> bool {
+        Command::new("docker")
+            .args(["inspect", "--format", "{{.State.Running}}", container_id])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .await
+            .map(|output| output.status.success() && output.stdout == b"true\n")
+            .unwrap_or(false)
     }
 
     /// Return TCP ports Docker has already published from the devcontainer to the host.
@@ -950,11 +1043,10 @@ impl DevContainer {
         parse_published_tcp_ports(&output).wrap_err("failed to parse published container ports")
     }
 
-    /// Remove Dockim's forwarding sidecars for this devcontainer.
+    /// Remove legacy Dockim forwarding sidecars for this devcontainer.
     ///
-    /// Forwarders are deliberately independent of Compose because they are dynamic and also
-    /// support non-Compose devcontainers. Removing them explicitly before `dockim down` gives
-    /// Compose networks a clean teardown even if the owning interactive process was interrupted.
+    /// New forwarding uses host-side listeners and does not create containers. This cleanup is
+    /// retained for sidecars left behind by older Dockim versions.
     pub async fn cleanup_port_forwarders(&self, logger: &Logger<'_>) -> Result<()> {
         let Ok(up_output) = self.inspect(logger).await else {
             return Ok(());
@@ -1431,6 +1523,15 @@ async fn compute_compose_project_name(
         return Ok(None);
     };
 
+    // The devcontainer CLI may choose a project name that differs from Docker Compose's default
+    // derived from the compose file directory (for example, `dockim_devcontainer` vs
+    // `devcontainer`). When a container already exists, its Compose label is authoritative.
+    if let Some(project_name) =
+        get_existing_compose_project_name(workspace_folder, config_path).await?
+    {
+        return Ok(Some(project_name));
+    }
+
     let env_name = normalize_project_name(
         std::env::var("COMPOSE_PROJECT_NAME")
             .unwrap_or_default()
@@ -1455,7 +1556,7 @@ async fn compute_compose_project_name(
         }
     }
 
-    let compose_name = get_compose_project_name_from_docker(&compose_paths).await?;
+    let compose_name = get_explicit_compose_project_name(&compose_paths)?;
     if let Some(compose_name) = compose_name {
         let normalized = normalize_project_name(compose_name.trim());
         if !normalized.is_empty() {
@@ -1497,6 +1598,47 @@ async fn compute_compose_project_name(
             )
         })?;
     Ok(Some(normalize_project_name(dir_name)))
+}
+
+async fn get_existing_compose_project_name(
+    workspace_folder: &Path,
+    config_path: &Path,
+) -> Result<Option<String>> {
+    let workspace_filter = format!(
+        "label=devcontainer.local_folder={}",
+        normalize_path(workspace_folder).display()
+    );
+    let config_filter = format!(
+        "label=devcontainer.config_file={}",
+        normalize_path(config_path).display()
+    );
+    let output = Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            &workspace_filter,
+            "--filter",
+            &config_filter,
+            "--format",
+            "{{.Label \"com.docker.compose.project\"}}",
+        ])
+        .stderr(Stdio::null())
+        .output()
+        .await;
+    let Ok(output) = output else {
+        return Ok(None);
+    };
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let output = String::from_utf8_lossy(&output.stdout);
+    Ok(output.lines().find_map(|line| {
+        let project_name = line.trim();
+        (!project_name.is_empty() && project_name != "<no value>")
+            .then(|| normalize_project_name(project_name))
+    }))
 }
 
 fn update_host_docker_internal_devcontainer_json_value(value: &mut Value) {
@@ -1621,19 +1763,31 @@ fn make_docker_compose_args(compose_paths: &[PathBuf], tail_args: &[&str]) -> Ve
     args
 }
 
-async fn get_compose_project_name_from_docker(compose_paths: &[PathBuf]) -> Result<Option<String>> {
-    let logger = crate::progress::root_logger();
-    let args = make_docker_compose_args(compose_paths, &["config", "--format", "json"]);
-    let output = logger
-        .capturing_stdout("Querying", "compose project name", &args)
-        .await
-        .wrap_err("failed to read compose project name via docker compose config")?;
+fn get_explicit_compose_project_name(compose_paths: &[PathBuf]) -> Result<Option<String>> {
+    let mut project_name = None;
+    for compose_path in compose_paths {
+        let contents = fs::read_to_string(compose_path)
+            .into_diagnostic()
+            .wrap_err_with(|| {
+                format!(
+                    "failed to read compose file while determining project name: {}",
+                    compose_path.display()
+                )
+            })?;
+        let value: Value = serde_yaml::from_str(&contents)
+            .into_diagnostic()
+            .wrap_err_with(|| {
+                format!(
+                    "failed to parse compose file while determining project name: {}",
+                    compose_path.display()
+                )
+            })?;
+        if let Some(name) = value["name"].as_str() {
+            project_name = Some(name.to_string());
+        }
+    }
 
-    let value: Value = serde_json::from_str(&output)
-        .into_diagnostic()
-        .wrap_err("failed to parse docker compose config output")?;
-
-    Ok(value["name"].as_str().map(str::to_string))
+    Ok(project_name)
 }
 
 async fn resolve_compose_service_names(compose_paths: &[PathBuf]) -> Result<Vec<String>> {
@@ -1760,7 +1914,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_listening_tcp_ports_keeps_addresses_and_excludes_loopback_from_forwarding() {
+    fn parse_listening_tcp_ports_keeps_addresses_and_excludes_only_docker_dns() {
         let ports = parse_listening_tcp_ports(
             "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n\
              0: 0100007F:A645 00000000:0000 0A 0 0 0 0 0 0 0 0\n\
@@ -1797,7 +1951,11 @@ mod tests {
             .all(|entry| entry.is_forwardable()));
         assert!(ports
             .iter()
-            .filter(|entry| matches!(entry.port, 42565 | 33813 | 44013))
+            .filter(|entry| matches!(entry.port, 42565 | 44013))
+            .all(|entry| entry.is_forwardable()));
+        assert!(ports
+            .iter()
+            .filter(|entry| entry.port == 33813)
             .all(|entry| !entry.is_forwardable()));
     }
 

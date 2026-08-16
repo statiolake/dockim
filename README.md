@@ -19,6 +19,7 @@ A modern CLI tool for managing Dev Containers with ease. Dockim simplifies your 
 
 - [Docker](https://docs.docker.com/get-docker/) or Docker Desktop
 - [Dev Container CLI](https://github.com/devcontainers/cli): `npm install -g @devcontainers/cli`
+- [Go](https://go.dev/doc/install/) (required when building Dockim from source)
 
 ### Install Dockim
 

@@ -125,11 +125,17 @@ dockim up --auto-ports
 # Dockim がリッスンポートをスキャンしてフォワード
 ```
 
-コンテナのネットワークインターフェースから到達できる TCP 待受だけを対象にします。
-`127.0.0.1` などの loopback 待受（Docker 内部DNSを含む）は、ネットワーク接続した
-sidecar から到達できないため無視します。Docker または Docker Compose がすでに公開して
-いるポートは二重にフォワードしません。実行中の devcontainer の
-`NetworkSettings.Ports` を参照して判定します。
+Dockim はコンテナ内の TCP 待受を2秒ごとに検出します。Docker または Docker Compose が
+すでに公開しているポートは、その公開経路をそのまま利用するため二重にフォワードしません。
+それ以外の待受はホスト側の TCP listener と Docker exec の stdio トンネルで転送するため、
+`review-relay.nvim` のような `127.0.0.1` 待受にも対応できます。Docker の embedded DNS
+（`127.0.0.11`）は、実装用ポート番号を推測せずアドレスで除外します。判定には実行中の
+devcontainer の `NetworkSettings.Ports` を参照します。
+
+自動転送も、`bash` / `shell` / `exec` などの Dockim セッションが動作している間は
+`dockim port ls` に表示されます。セッションを終了すると自動的に解除されます。
+永続的な `dockim port add` はホスト側の小さな daemon が管理し、`docker compose down`
+などで devcontainer が消えると daemon も自動終了します。
 
 ## アプリケーション固有シナリオ
 

@@ -4,6 +4,8 @@ pub mod clipboard;
 pub mod config;
 pub mod console;
 pub mod devcontainer;
+pub mod embedded_forwarder;
 pub mod exec;
 pub mod port_forwarder;
+pub mod port_registry;
 pub mod progress;

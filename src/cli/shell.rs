@@ -53,7 +53,7 @@ pub async fn main(
         crate::cli::build::main(logger, config, args, &build_args).await?;
     }
 
-    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger, join_set));
+    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger));
     let _auto_forwarder =
         AutoPortForwarder::start(dc.clone(), port_forwarder.clone(), vec![], logger, join_set);
 

@@ -198,6 +198,9 @@ pub enum Subcommand {
     #[clap(alias = "p", about = "Manage port forwarding")]
     Port(PortArgs),
 
+    #[clap(name = "port-daemon", hide = true)]
+    PortDaemon(PortDaemonArgs),
+
     #[clap(about = "Show resolved devcontainer/compose status")]
     Ps(PsArgs),
 
@@ -322,7 +325,7 @@ pub enum PortSubcommand {
     #[clap(about = "Remove a port forwarding rule")]
     Rm(PortRmArgs),
 
-    #[clap(about = "List current port forwarding rules")]
+    #[clap(about = "List active port forwards")]
     Ls(PortLsArgs),
 }
 
@@ -343,6 +346,27 @@ pub struct PortRmArgs {
 
 #[derive(Debug, clap::Parser)]
 pub struct PortLsArgs {}
+
+#[derive(Debug, clap::Parser)]
+pub struct PortDaemonArgs {
+    #[clap(long)]
+    pub workspace_folder: PathBuf,
+
+    #[clap(long)]
+    pub config_path: PathBuf,
+
+    #[clap(long)]
+    pub host_port: u16,
+
+    #[clap(long)]
+    pub container_port: u16,
+
+    #[clap(long)]
+    pub expected_container_id: String,
+
+    #[clap(long)]
+    pub registration_path: PathBuf,
+}
 
 #[derive(Debug, clap::Parser)]
 pub struct StopArgs {}

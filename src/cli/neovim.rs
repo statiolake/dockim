@@ -82,7 +82,7 @@ pub async fn main(
     };
     let clipboard_port = clipboard.as_ref().map(|s| s.port);
 
-    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger, join_set));
+    let port_forwarder = Arc::new(PortForwarder::new(dc.clone(), logger));
 
     let use_remote_ui = config.neovim.remote_ui && !neovim_args.no_remote_ui;
 
@@ -317,7 +317,7 @@ async fn run_neovim_client_with_retry(
     let mut retry_interval = 1;
     loop {
         // If the Neovim client finishes shorter than this threshold, treat it as a failure. This
-        // occures when the socat is not ready, for example.
+        // occurs when the Docker exec tunnel is not ready, for example.
         const MIN_DURATION: Duration = Duration::from_millis(500);
 
         let result = run_neovim_client(logger, config, &args, MIN_DURATION).await;

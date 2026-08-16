@@ -45,6 +45,9 @@ async fn main() -> Result<()> {
         Subcommand::Port(port_args) => {
             port::main(&logger, &config, &args, port_args, &mut join_set).await
         }
+        Subcommand::PortDaemon(port_daemon_args) => {
+            port::daemon_main(&logger, port_daemon_args).await
+        }
         Subcommand::Ps(ps_args) => ps::main(&logger, &config, &args, ps_args).await,
         Subcommand::Ls(ls_args) => ls::main(&logger, &config, &args, ls_args).await,
         Subcommand::Stop(stop_args) => stop::main(&logger, &config, &args, stop_args).await,
