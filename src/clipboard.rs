@@ -1,6 +1,6 @@
 use std::{env, process::Stdio, sync::Arc};
 
-use miette::{miette, IntoDiagnostic, Result};
+use miette::{miette, IntoDiagnostic, Result, WrapErr};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -12,6 +12,14 @@ use tokio::{
 pub struct ClipboardServer {
     shutdown_tx: std::sync::Mutex<Option<oneshot::Sender<()>>>,
     pub port: u16,
+}
+
+const MAX_HTTP_HEADER_SIZE: usize = 16 * 1024;
+
+#[derive(Debug, PartialEq, Eq)]
+struct HttpRequest {
+    method: String,
+    body: Vec<u8>,
 }
 
 impl ClipboardServer {
@@ -88,44 +96,105 @@ async fn run_server(
 }
 
 async fn handle_client(mut stream: TcpStream) -> Result<()> {
-    let mut buffer = Vec::new();
-    let mut temp_buf = [0; 1024];
+    let request = read_http_request(&mut stream).await?;
 
-    // Read the HTTP request
-    loop {
+    match request.method.as_str() {
+        "GET" => handle_get(&mut stream).await,
+        "POST" => handle_post(&mut stream, &request.body).await,
+        _ => send_error_response(&mut stream, "405 Method Not Allowed").await,
+    }
+}
+
+async fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
+    let mut buffer = Vec::new();
+    let header_end = loop {
+        let mut temp_buf = [0; 1024];
         let bytes_read = stream.read(&mut temp_buf).await.into_diagnostic()?;
         if bytes_read == 0 {
-            break;
+            return Err(miette!(
+                "unexpected end of stream while reading HTTP headers"
+            ));
         }
         buffer.extend_from_slice(&temp_buf[..bytes_read]);
 
-        // Check if we have a complete HTTP request
-        if buffer.windows(4).any(|w| w == b"\r\n\r\n") {
-            break;
+        if let Some(position) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+            let header_end = position + 4;
+            if header_end > MAX_HTTP_HEADER_SIZE {
+                return Err(miette!("HTTP headers are too large"));
+            }
+            break header_end;
+        }
+
+        if buffer.len() > MAX_HTTP_HEADER_SIZE {
+            return Err(miette!("HTTP headers are too large"));
+        }
+    };
+
+    let headers = std::str::from_utf8(&buffer[..header_end])
+        .into_diagnostic()
+        .wrap_err("HTTP headers are not valid UTF-8")?;
+    let mut lines = headers.split("\r\n");
+    let request_line = lines
+        .next()
+        .filter(|line| !line.is_empty())
+        .ok_or_else(|| miette!("HTTP request line is missing"))?;
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts
+        .next()
+        .ok_or_else(|| miette!("HTTP method is missing"))?;
+    if request_parts.next().is_none() {
+        return Err(miette!("HTTP request target is missing"));
+    }
+
+    let mut content_length = None;
+    for line in lines.filter(|line| !line.is_empty()) {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| miette!("malformed HTTP header"))?;
+        if name.eq_ignore_ascii_case("content-length") {
+            let length = value
+                .trim()
+                .parse::<usize>()
+                .into_diagnostic()
+                .wrap_err("invalid Content-Length header")?;
+            if content_length.replace(length).is_some() {
+                return Err(miette!("duplicate Content-Length header"));
+            }
         }
     }
 
-    let request = String::from_utf8_lossy(&buffer);
-    let lines: Vec<&str> = request.lines().collect();
+    let body = if method == "POST" {
+        let content_length = content_length
+            .ok_or_else(|| miette!("POST request is missing Content-Length header"))?;
+        let mut body = buffer[header_end..].to_vec();
+        body.truncate(content_length);
 
-    if lines.is_empty() {
-        return Ok(());
-    }
+        while body.len() < content_length {
+            let mut temp_buf = [0; 8192];
+            let bytes_to_read = (content_length - body.len()).min(temp_buf.len());
+            let bytes_read = stream
+                .read(&mut temp_buf[..bytes_to_read])
+                .await
+                .into_diagnostic()?;
+            if bytes_read == 0 {
+                return Err(miette!(
+                    "unexpected end of stream while reading HTTP body (received {} of {} bytes)",
+                    body.len(),
+                    content_length
+                ));
+            }
+            body.extend_from_slice(&temp_buf[..bytes_read]);
+        }
 
-    let request_line = lines[0];
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
+        body
+    } else {
+        Vec::new()
+    };
 
-    if parts.len() < 2 {
-        return send_error_response(&mut stream, "400 Bad Request").await;
-    }
-
-    let method = parts[0];
-
-    match method {
-        "GET" => handle_get(&mut stream).await,
-        "POST" => handle_post(&mut stream, &buffer).await,
-        _ => send_error_response(&mut stream, "405 Method Not Allowed").await,
-    }
+    Ok(HttpRequest {
+        method: method.to_string(),
+        body,
+    })
 }
 
 async fn handle_get(stream: &mut TcpStream) -> Result<()> {
@@ -149,16 +218,7 @@ async fn handle_get(stream: &mut TcpStream) -> Result<()> {
     Ok(())
 }
 
-async fn handle_post(stream: &mut TcpStream, buffer: &[u8]) -> Result<()> {
-    // Find the start of the body (after \r\n\r\n)
-    let body_start = buffer
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|pos| pos + 4)
-        .unwrap_or(buffer.len());
-
-    let body = &buffer[body_start..];
-
+async fn handle_post(stream: &mut TcpStream, body: &[u8]) -> Result<()> {
     match set_clipboard(body).await {
         Ok(_) => {
             let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
@@ -345,4 +405,36 @@ fn detect_env() -> Result<String> {
     }
 
     Err(miette!("Unknown operating system"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::{io::AsyncWriteExt, net::TcpListener};
+
+    #[tokio::test]
+    async fn reads_post_body_until_content_length() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let body: Vec<u8> = (0..4096).map(|index| (index % 251) as u8).collect();
+        let expected_body = body.clone();
+        let header = format!(
+            "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+
+        let client = tokio::spawn(async move {
+            let mut stream = TcpStream::connect(address).await.unwrap();
+            stream.write_all(header.as_bytes()).await.unwrap();
+            stream.write_all(&body[..823]).await.unwrap();
+            stream.write_all(&body[823..]).await.unwrap();
+        });
+
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut stream).await.unwrap();
+        client.await.unwrap();
+
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.body, expected_body);
+    }
 }
