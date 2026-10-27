@@ -30,6 +30,83 @@ pub struct Config {
 
     #[serde(default)]
     pub remote: RemoteConfig,
+
+    #[serde(default)]
+    pub sshim: SshimConfig,
+}
+
+/// Settings of the `sshim` binary (SSH hosts). See `docs/en/src/sshim.md`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SshimConfig {
+    /// The isolated root on the host, relative to its `$HOME` (or absolute).
+    #[serde(default = "default_sshim_root")]
+    pub root: String,
+
+    /// The shell `sshim shell` starts; the host's login shell (`$SHELL`) when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+
+    /// The `ssh` program and any extra options, before sshim's own.
+    #[serde(default = "default_sshim_ssh_command")]
+    pub ssh_command: Vec<String>,
+
+    /// How long the shared connection outlives the last sshim command (`ControlPersist`).
+    #[serde(default = "default_sshim_control_persist")]
+    pub control_persist: String,
+
+    #[serde(default = "default_true")]
+    pub install_neovim: bool,
+
+    #[serde(default = "default_true")]
+    pub install_tmux: bool,
+
+    /// Local paths copied to `xdg/config/<to>` under the root. Unset: Neovim's and tmux's XDG
+    /// configuration (`$XDG_CONFIG_HOME/nvim`, `$XDG_CONFIG_HOME/tmux`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync: Option<Vec<SyncEntryConfig>>,
+
+    /// Where downloaded artifacts are cached on this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SyncEntryConfig {
+    /// A local file or directory: absolute, `~/…` or `$XDG_CONFIG_HOME/…`.
+    pub from: String,
+    /// Where under `xdg/config` on the host: `nvim`, `tmux/tmux.conf`, `zsh/.zshrc`.
+    pub to: String,
+}
+
+impl Default for SshimConfig {
+    fn default() -> Self {
+        SshimConfig {
+            root: default_sshim_root(),
+            shell: None,
+            ssh_command: default_sshim_ssh_command(),
+            control_persist: default_sshim_control_persist(),
+            install_neovim: true,
+            install_tmux: true,
+            sync: None,
+            cache_dir: None,
+        }
+    }
+}
+
+fn default_sshim_root() -> String {
+    ".sshim".to_string()
+}
+
+fn default_sshim_ssh_command() -> Vec<String> {
+    vec!["ssh".to_string()]
+}
+
+fn default_sshim_control_persist() -> String {
+    "10m".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -73,6 +150,7 @@ impl Default for Config {
             dotfiles_install_command: default_dotfiles_install_command(),
             copy_credentials: default_copy_credentials(),
             remote: RemoteConfig::default(),
+            sshim: SshimConfig::default(),
         }
     }
 }
@@ -224,6 +302,22 @@ mod tests {
         let config: Config = toml::from_str("").unwrap();
 
         assert!(!config.copy_credentials);
+    }
+
+    #[test]
+    fn sshim_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.sshim.root, ".sshim");
+        assert!(config.sshim.install_neovim && config.sshim.install_tmux);
+        assert!(config.sshim.sync.is_none());
+
+        let config: Config = toml::from_str(
+            "[sshim]\nsync = [{ from = \"~/.tmux.conf\", to = \"tmux/tmux.conf\" }]\n",
+        )
+        .unwrap();
+        assert_eq!(config.sshim.sync.unwrap()[0].to, "tmux/tmux.conf");
+        // The default config file can be written out.
+        toml::to_string_pretty(&Config::default()).unwrap();
     }
 
     #[test]

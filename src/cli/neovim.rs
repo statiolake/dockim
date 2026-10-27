@@ -19,6 +19,7 @@ use crate::{
     devcontainer::{DevContainer, RootMode},
     port_forwarder::PortForwarder,
     progress::Logger,
+    shell::shell_quote,
 };
 
 pub const SERVER_PLACEHOLDER: &str = "{server}";
@@ -174,20 +175,6 @@ fn format_envs_to_invocation(envs: &HashMap<&'static str, String>) -> Vec<String
         result.push(format!("{key}={value}"));
     }
     result
-}
-
-fn shell_quote(arg: &str) -> String {
-    if arg.is_empty() {
-        return "''".to_string();
-    }
-    if arg
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b"-_./:=@".contains(&b))
-    {
-        return arg.to_string();
-    }
-
-    format!("'{}'", arg.replace('\'', r"'\''"))
 }
 
 fn build_neovim_invocation(

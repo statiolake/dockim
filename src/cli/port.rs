@@ -176,7 +176,7 @@ async fn list_ports(logger: &Logger<'_>, forwarder: &PortForwarder) -> Result<()
     Ok(())
 }
 
-fn parse_port_descriptor(port_descriptor: &str) -> Result<(u16, u16)> {
+pub fn parse_port_descriptor(port_descriptor: &str) -> Result<(u16, u16)> {
     match *port_descriptor.split(':').collect_vec() {
         [port] => {
             let port = parse_port(port, port_descriptor)?;

@@ -11,6 +11,11 @@ pub async fn main(
     _args: &Args,
     _init_config_args: &InitConfigArgs,
 ) -> Result<()> {
+    write_default_config(logger)
+}
+
+/// Write the default config file (shared by dockim and sshim, which read the same file).
+pub fn write_default_config(logger: &Logger<'_>) -> Result<()> {
     let config_dir = dirs::config_dir()
         .ok_or_else(|| miette!("Could not determine config directory"))?
         .join("dockim");
@@ -30,7 +35,7 @@ pub async fn main(
         "Created default config file at: {}",
         config_path.display()
     ));
-    logger.write("Edit this file to customize your dockim settings.");
+    logger.write("Edit this file to customize your dockim and sshim settings.");
 
     Ok(())
 }

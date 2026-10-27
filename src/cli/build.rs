@@ -9,6 +9,11 @@ use crate::{
     devcontainer::{ContainerFileDestination, DevContainer, RootMode},
     exec,
     progress::Logger,
+    target::docker::DockerTarget,
+    terraform::{
+        dotfiles::{self, Placement},
+        probe::{run_probe, Arch, ProbeQuery},
+    },
 };
 
 pub async fn main(
@@ -168,22 +173,9 @@ async fn install_neovim_from_binary(
     config: &Config,
     dc: &DevContainer,
 ) -> Result<()> {
-    let arch = dc
-        .exec_capturing_stdout(
-            logger,
-            "Querying",
-            "system architecture",
-            &["uname", "-m"],
-            RootMode::No,
-        )
-        .await
-        .wrap_err("failed to determine system architecture")?
-        .trim()
-        .to_string();
-    let arch = match arch.as_str() {
-        "x86_64" => "x86_64",
-        "aarch64" | "arm64" => "arm64",
-        _ => return Err(miette!("Unsupported architecture: {}", arch)),
+    let arch = match container_arch(logger, dc).await? {
+        Arch::X64 => "x86_64",
+        Arch::Arm64 => "arm64",
     };
 
     let download_url = format!(
@@ -322,22 +314,9 @@ async fn setup_github_cli(logger: &Logger<'_>, config: &Config, dc: &DevContaine
             step.set_completed(Some("not found, installing...".into()));
         }
 
-        let arch = dc
-            .exec_capturing_stdout(
-                logger,
-                "Querying",
-                "system architecture",
-                &["uname", "-m"],
-                RootMode::No,
-            )
-            .await
-            .wrap_err("failed to determine system architecture")?
-            .trim()
-            .to_string();
-        let arch = match arch.as_str() {
-            "x86_64" => "amd64",
-            "aarch64" | "arm64" => "arm64",
-            _ => return Err(miette!("Unsupported architecture: {}", arch)),
+        let arch = match container_arch(logger, dc).await? {
+            Arch::X64 => "amd64",
+            Arch::Arm64 => "arm64",
         };
 
         // Get the latest release version from GitHub API on host machine
@@ -473,25 +452,18 @@ async fn prepare_opt_dir(logger: &Logger<'_>, dc: &DevContainer, owner_user: &st
 }
 
 async fn install_dotfiles(logger: &Logger<'_>, config: &Config, dc: &DevContainer) -> Result<()> {
-    let dotfiles_repository_name = shell_quote(&config.dotfiles_repository_name);
+    // A dev container is disposable and the person's own: the dotfiles repository is cloned
+    // into it and installed with its real $HOME (see terraform::dotfiles for the server case).
+    let script = dotfiles::repository_script(
+        &Placement::container(),
+        &config.dotfiles_repository_name,
+        &config.dotfiles_install_command,
+    )?;
     dc.exec(
         logger,
         "Deploying",
         "dotfiles",
-        &[
-            "sh",
-            "-c",
-            &format!(
-                concat!(
-                    "rm -rf /opt/dotfiles && ",
-                    "~/.local/bin/gh repo clone {dotfiles_repository_name} /opt/dotfiles && ",
-                    "cd /opt/dotfiles && ",
-                    "{dotfiles_install_command}"
-                ),
-                dotfiles_repository_name = dotfiles_repository_name,
-                dotfiles_install_command = config.dotfiles_install_command
-            ),
-        ],
+        &["sh", "-c", &script],
         RootMode::No,
     )
     .await?;
@@ -499,36 +471,26 @@ async fn install_dotfiles(logger: &Logger<'_>, config: &Config, dc: &DevContaine
     Ok(())
 }
 
-fn shell_quote(arg: &str) -> String {
-    if arg.is_empty() {
-        return "''".to_string();
-    }
-    if arg
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b"-_./:=@".contains(&b))
-    {
-        return arg.to_string();
-    }
-
-    format!("'{}'", arg.replace('\'', r"'\''"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::shell_quote;
-
-    #[test]
-    fn shell_quote_leaves_repo_names_unquoted_when_safe() {
-        assert_eq!(shell_quote("owner/dotfiles"), "owner/dotfiles");
-        assert_eq!(
-            shell_quote("git@github.com:owner/dotfiles"),
-            "git@github.com:owner/dotfiles"
-        );
-    }
-
-    #[test]
-    fn shell_quote_quotes_spaces_and_single_quotes() {
-        assert_eq!(shell_quote("owner/my dotfiles"), "'owner/my dotfiles'");
-        assert_eq!(shell_quote("owner/it's-mine"), "'owner/it'\\''s-mine'");
+/// The container's architecture, from the shared core's probe over `docker exec`.
+async fn container_arch(logger: &Logger<'_>, dc: &DevContainer) -> Result<Arch> {
+    let info = dc.inspect(logger).await?;
+    let target = DockerTarget::new(&info, RootMode::No);
+    let mut step = logger.step("Querying", "system architecture");
+    let probe = match run_probe(&target, &ProbeQuery::default()).await {
+        Ok(probe) => probe,
+        Err(error) => {
+            step.set_failed();
+            return Err(error.wrap_err("failed to determine system architecture"));
+        }
+    };
+    match probe.arch() {
+        Some(arch) => {
+            step.set_completed(Some(probe.machine.clone()));
+            Ok(arch)
+        }
+        None => {
+            step.set_failed();
+            Err(miette!("Unsupported architecture: {}", probe.machine))
+        }
     }
 }
