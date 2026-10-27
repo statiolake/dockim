@@ -9,6 +9,7 @@
   - [Development Workflow](user-guide/development-workflow.md)
 - [Neovim Integration](neovim-integration.md)
 - [Port Management](port-management.md)
+- [sshim: SSH Hosts](sshim.md)
 - [Configuration](configuration.md)
 - [Commands Reference](commands-reference.md)
 - [Advanced Usage](advanced-usage.md)

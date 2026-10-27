@@ -12,6 +12,7 @@ A modern CLI tool for managing Dev Containers with ease. Dockim simplifies your 
 - 📝 **Neovim Integration** - Launch Neovim with remote UI support
 - 🛠 **Project Initialization** - Generate dev container templates instantly
 - 🔧 **Flexible Configuration** - Support for custom builds and source compilation
+- 🖧 **sshim** - The same commands for SSH hosts: terraforms a server with a pinned Neovim, a static tmux and your configuration, isolated under `~/.sshim`
 
 ## 📦 Installation
 
@@ -21,7 +22,11 @@ A modern CLI tool for managing Dev Containers with ease. Dockim simplifies your 
 - [Dev Container CLI](https://github.com/devcontainers/cli): `npm install -g @devcontainers/cli`
 - [Go](https://go.dev/doc/install/) (required when building Dockim from source)
 
+For `sshim` (SSH hosts): the OpenSSH client (`ssh`) and `curl` on your machine. Nothing is needed on the host but a POSIX shell, `tar` and `gzip`.
+
 ### Install Dockim
+
+Both binaries, `dockim` and `sshim`, are installed together.
 
 ```bash
 # From source (requires Rust)
@@ -220,6 +225,41 @@ dockim port rm 8080
 # Remove all port forwards
 dockim port rm --all
 ```
+
+## 🖧 sshim: SSH hosts
+
+`sshim` takes dockim's commands, with the same names and flags, to a server reached with `ssh`:
+
+```bash
+sshim -H build-box up        # connect (one shared ControlMaster) and terraform, idempotently
+sshim -H build-box v         # Neovim on the host (remote UI over a forwarded port by default)
+sshim -H build-box sh        # shell / bash / exec on the host
+sshim -H build-box port add 8080
+sshim -H build-box clean     # remove everything sshim put on the host
+```
+
+`-H` (or `SSHIM_HOST`) is passed to `ssh` as written, so `~/.ssh/config` aliases apply.
+
+Terraforming sends only what is missing or changed, over the SSH connection (the host needs no
+internet): the pinned Neovim from [neovim-binaries](https://github.com/statiolake/neovim-binaries)
+(v0.12.6, glibc ≥ 2.14 on x86_64 / 2.17 on aarch64), a static musl tmux, and copies of your local
+configuration (by default `$XDG_CONFIG_HOME/nvim` and `$XDG_CONFIG_HOME/tmux`; `[sshim] sync` chooses).
+Everything lives under `~/.sshim` (`bin/` wrappers that set `XDG_*`, `pkg/`, `xdg/{config,data,state,cache}`),
+never in the server's own `~/.config`. On musl, old glibc or another architecture the host's own
+`nvim` is used, with a message.
+
+| dockim | sshim |
+|---|---|
+| `up`, `build` | terraform the host (`--rebuild`: resend all; `--no-cache`/`--build-no-cache`: re-download; `--neovim-from-source`: refused) |
+| `stop`, `down` | close the shared connection (files stay; `clean` removes them) |
+| `neovim`/`v`, `shell`/`sh`, `bash`, `exec` | on the host |
+| `port add/rm/ls` | forwards on the shared connection |
+| `ps`, `ls` | host status; aliases from `~/.ssh/config` |
+| `init`, `init-docker` | refused (container only) |
+| — | `clean` |
+
+See [docs/en/src/sshim.md](docs/en/src/sshim.md) ([日本語](docs/ja/src/sshim.md)) for the layout,
+the dotfiles placement (container: clone + install as before; server: isolated copies) and every option.
 
 ## ⚙️ Configuration
 

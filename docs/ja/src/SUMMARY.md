@@ -9,6 +9,7 @@
   - [開発ワークフロー](user-guide/development-workflow.md)
 - [Neovim 連携](neovim-integration.md)
 - [ポート管理](port-management.md)
+- [sshim: SSH ホスト](sshim.md)
 - [設定](configuration.md)
 - [コマンドリファレンス](commands-reference.md)
 - [高度な使い方](advanced-usage.md)
